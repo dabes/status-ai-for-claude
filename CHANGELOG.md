@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Plan usage only from the status line; no more stale numbers from other caches, and no number from a window that has already reset.
+
 ## 0.2.0
 
 - Plan usage at the top: 5-hour session and weekly limits with reset times, captured by the bundled status-line script (no token).

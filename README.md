@@ -30,6 +30,8 @@ Claude Code passes your plan's usage limits to its **status line** command. The 
 
 This needs no token and makes no network request: it only uses what Claude Code already hands to the status line. The numbers refresh after each Claude response.
 
+**Limitation:** Claude Code runs the status line only in the terminal (`claude`), not in its VS Code panel. If you only use Claude Code inside VS Code, the usage bars stay empty; use Claude Code's own **Usage** view there. The panel never shows usage from an older window: once a window has reset, its bar stays empty until fresh numbers arrive.
+
 ## Requirements
 
 - Python 3 on `PATH`. If it isn't there, set **AI Status: Python** to the executable. The panel server uses only the standard library.

@@ -132,8 +132,8 @@ def agent_state(path):
 
 
 def usage():
-    """Limites do plano (5 h e 7 d): percentual usado e quando reinicia. Fonte: o statusline.py (o que o Claude Code
-    passa à linha de status); sem ele, o cache de outra extensão (vscode-claude-status), avisando a idade."""
+    """Limites do plano (5 h e 7 d): percentual usado e quando reinicia. Fonte única: o statusline.py (o que o Claude
+    Code de terminal passa à linha de status)."""
     def window(w, pct_key, reset_key, scale=1.0):
         if not w or w.get(pct_key) is None:
             return None
@@ -146,15 +146,7 @@ def usage():
                 "seven_day": window(rl.get("seven_day"), "used_percentage", "resets_at")}
     except (OSError, ValueError):
         pass
-    try:
-        d = json.loads((CONFIG / "vscode-claude-status-cache.json").read_text(encoding="utf-8"))
-        u = d.get("usageData") or {}
-        updated = time.mktime(time.strptime(d["updatedAt"][:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone if d.get("updatedAt") else None
-        return {"source": "vscode-claude-status", "updated": updated,
-                "five_hour": window({"p": u.get("utilization5h"), "r": u.get("reset5hAt")}, "p", "r", 100.0),
-                "seven_day": window({"p": u.get("utilization7d"), "r": u.get("reset7dAt")}, "p", "r", 100.0)}
-    except (OSError, ValueError, KeyError):
-        return None
+    return None   # sem linha de status (Claude Code no VS Code não a roda): não há fonte confiável
 
 
 def agents(rows, days_hours=24):
@@ -379,16 +371,16 @@ function agent(a){return `
 function until(t,now){if(!t)return '';const s=t-now;if(s<=0)return 'reiniciando';
   const d=new Date(t*1000), hm=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   return 'reinicia '+(s<86400?'em '+ago(s)+' ('+hm+')':d.toLocaleDateString([], {weekday:'short',day:'2-digit'})+' '+hm)}
-function meter(title,w,now){if(!w)return `<div class="meter"><div class="row"><span>${title}</span><span class="mut">sem dado</span></div></div>`;
+function meter(title,w,now){if(w&&w.resets_at&&w.resets_at<now)w=null;   // janela já reiniciou: o número é de antes
+  if(!w)return `<div class="meter"><div class="row"><span>${title}</span><span class="mut">sem dado</span></div></div>`;
   const cls=w.pct>=90?'max':w.pct>=70?'hi':'';
   return `<div class="meter ${cls}"><div class="row"><span>${title}</span><b>${w.pct.toFixed(0)}%</b></div>
   <div class="bar"><i style="width:${Math.min(100,w.pct)}%"></i></div><div class="log mut">${until(w.resets_at,now)}</div></div>`}
 function usage(u,now){
   document.getElementById('usage').innerHTML=u?meter('Sessão (5 h)',u.five_hour,now)+meter('Semana (7 d)',u.seven_day,now)
-    :'<div class="meter mut">Uso do plano indisponível: configure o statusline.py como linha de status do Claude Code.</div>';
+    :'<div class="meter mut">Uso do plano: só disponível quando o Claude Code roda no terminal com o statusline.py como linha de status. No VS Code, veja o painel Usage do próprio Claude Code.</div>';
   const age=u&&u.updated?now-u.updated:null;
-  document.getElementById('stale').textContent=!u?'':u.source!=='statusline'?'Dado antigo de outra extensão ('+ago(age)+' atrás); configure o statusline.py para ficar em dia.'
-    :age>900?'Atualizado há '+ago(age)+' (o Claude Code atualiza a cada resposta).':'';
+  document.getElementById('stale').textContent=u&&age>900?'Atualizado há '+ago(age)+' (vem da última resposta do Claude Code no terminal).':'';
 }
 async function tick(){
   let data;try{data=await (await fetch('api')).json()}catch(e){document.getElementById('sum').textContent='servidor parado';return}
