@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Fix for the blank panel after moving it: the webview is no longer retained while hidden (VS Code draws a retained webview as an overlay that does not follow the panel to its new side); it is rebuilt where the panel is.
+
 ## 0.3.2
 
 - The panel gets its data through the extension (webviews may block local network access), and a visible panel that stops asking for data for 10 s is rebuilt, which covers being moved to another side.

@@ -122,7 +122,8 @@ class Provider {
 function activate(context) {
   const provider = new Provider(context);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider("aiStatus.view", provider, { webviewOptions: { retainContextWhenHidden: true } }),
+    // No retainContextWhenHidden: a retained webview is an overlay that stays behind when the panel is moved.
+    vscode.window.registerWebviewViewProvider("aiStatus.view", provider),
     vscode.commands.registerCommand("aiStatus.reload", () => provider.render()),
     { dispose: clearInterval.bind(null, setInterval(() => provider.watch(), 5000)) }
   );
