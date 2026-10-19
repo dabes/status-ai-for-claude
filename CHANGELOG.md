@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.6
+
+- No more automatic re-show (it pulled focus away from the other panel tabs). After moving the panel, click the refresh button in its title if it stays blank.
+
 ## 0.3.5
 
 - Moving the panel to another side hid the view for good (VS Code sends no further event): the extension now asks for it back. A refresh button in the panel title rebuilds it by hand. An "AI Status" output channel logs what the panel does.

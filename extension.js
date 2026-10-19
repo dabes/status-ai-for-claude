@@ -86,10 +86,10 @@ class Provider {
     view.onDidChangeVisibility(() => {
       say(`visibility ${view.visible}`);
       if (this.view !== view) return;
-      if (view.visible) return this.render();
-      // Moving the panel to another side hides the view and VS Code never shows it again (no visible/dispose/resolve
-      // event): ask for it back. ponytail: also reopens the panel if it was really closed within these 500 ms.
-      setTimeout(() => { if (this.view === view && !view.visible) { say("still hidden, show()"); view.show(true); } }, 500);
+      if (view.visible) this.render();
+      // ponytail: moving the panel to another side can leave the view hidden with no further event; the refresh
+      // button in the panel title (aiStatus.reload) brings it back. Re-showing it automatically stole focus from
+      // the other panel tabs.
     });
     view.webview.onDidReceiveMessage(async (m) => {
       if (!m || m.type !== "api") return;
