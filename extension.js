@@ -1,5 +1,7 @@
-// AI Status for Claude Code: shows the page served by media/ai_status.py (a local, read-only Python server) in a
-// webview. Reuses a server already listening on the port; otherwise starts one and stops it when VS Code closes.
+// AI Status for Claude Code: a native tree (usage, background tasks, sessions) and a status-bar item, fed by /api of
+// media/ai_status.py (a local, read-only Python server). Reuses a server already listening on the port; otherwise
+// starts one and stops it when VS Code closes. A tree, not a webview: a webview view in the panel stayed blank after
+// the panel was moved to another side (VS Code leaves its overlay behind and sends no further event).
 const vscode = require("vscode");
 const http = require("http");
 const path = require("path");
@@ -50,103 +52,125 @@ function get(port, urlPath) {
   });
 }
 
-// The server's page goes straight into the webview (no iframe). The webview never talks to 127.0.0.1 itself (VS Code
-// webviews may block local network access): the page asks the extension for /api, and the extension fetches it.
-const BRIDGE = `<script>(() => {
-  const vs = acquireVsCodeApi(), waiting = {};
-  let next = 0;
-  addEventListener("message", (e) => { const m = e.data || {}; if (waiting[m.id]) { waiting[m.id](m); delete waiting[m.id]; } });
-  window.AI_STATUS_FETCH = () => new Promise((ok, fail) => {
-    const id = ++next;
-    waiting[id] = (m) => (m.error ? fail(new Error(m.error)) : ok(m.data));
-    vs.postMessage({ id, type: "api" });
-  });
-})()</script>`;
+function ago(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.round(s / 60)} min`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`;
+  return `${Math.floor(s / 86400)} d ${Math.round((s % 86400) / 3600)} h`;
+}
 
-async function page(port, error) {
-  if (error) {
-    return `<!doctype html><body style="font:13px system-ui;color:var(--vscode-foreground);padding:12px">
-      AI Status unavailable: ${String(error).replace(/[<>&]/g, "")}</body>`;
-  }
-  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">`;
-  const html = await get(port, "/");
-  return html.replace("<head>", `<head>${csp}${BRIDGE}`);
+function bar(pct) {
+  const n = Math.round(Math.min(100, Math.max(0, pct)) / 10);
+  return "█".repeat(n) + "░".repeat(10 - n);
+}
+
+// A window that has already reset: its number is from before, show nothing.
+function windowOf(w, now) {
+  return w && !(w.resets_at && w.resets_at < now) ? w : null;
+}
+
+function item(label, opts = {}) {
+  const it = new vscode.TreeItem(label, opts.children ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+  it.description = opts.description;
+  it.tooltip = opts.tooltip;
+  if (opts.icon) it.iconPath = new vscode.ThemeIcon(opts.icon, opts.color && new vscode.ThemeColor(opts.color));
+  if (opts.log) it.command = { command: "vscode.open", title: "Open log", arguments: [vscode.Uri.file(opts.log)] };
+  it.children = opts.children;
+  return it;
+}
+
+function meter(title, w, now) {
+  if (!w) return item(title, { description: "sem dado", icon: "dashboard" });
+  const reset = w.resets_at ? `reinicia em ${ago(w.resets_at - now)}` : "";
+  const color = w.pct >= 90 ? "errorForeground" : w.pct >= 70 ? "editorWarning.foreground" : undefined;
+  return item(`${title}  ${w.pct.toFixed(0)}%`, { description: `${bar(w.pct)}  ${reset}`, icon: "dashboard", color });
+}
+
+function tree(d) {
+  const now = d.now, u = d.usage || {};
+  const usage = item("Uso do plano", { icon: "pulse", children: [
+    meter("Sessão (5 h)", windowOf(u.five_hour, now), now),
+    meter("Semana (7 d)", windowOf(u.seven_day, now), now),
+  ] });
+  const running = d.tasks.filter((t) => t.status === "rodando");
+  const recent = d.tasks.filter((t) => t.status !== "rodando").slice(0, 5);
+  const task = (t) => {
+    const pct = t.status === "rodando" && t.progress && t.progress.pct != null ? `${t.progress.pct.toFixed(0)}%  ` : "";
+    const icon = t.status === "rodando" ? "sync~spin" : t.status === "completed" ? "check" : "error";
+    return item(t.description || t.command, { description: `${pct}${t.status}`, icon, log: t.log,
+      tooltip: [t.command, ...(t.log_tail || [t.last || ""])].join("\n") });
+  };
+  const tasks = item(`Tarefas  (${running.length} rodando)`, { icon: "terminal",
+    children: d.tasks.length ? [...running, ...recent].map(task) : [item("nenhuma", { icon: "circle-slash" })] });
+  const sessions = item(`Sessões  (${d.agents.length})`, { icon: "hubot", children: d.agents.map((a) =>
+    item(`${a.project}: ${a.status}`, { description: a.action, tooltip: `${a.title}\n${a.model}\n${a.action}`,
+      icon: a.status === "trabalhando" ? "loading~spin" : a.status === "parado" ? "debug-pause" : "comment" })) });
+  return [usage, tasks, sessions];
+}
+
+function usageText(d) {
+  const u = (d && d.usage) || {};
+  const part = (label, w) => (windowOf(w, d.now) ? `${label} ${w.pct.toFixed(0)}%` : null);
+  return [part("5h", u.five_hour), part("7d", u.seven_day)].filter(Boolean).join(" · ");
 }
 
 class Provider {
   constructor(context) {
     this.context = context;
+    this.changed = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this.changed.event;
+    this.roots = [item("carregando…", { icon: "loading~spin" })];
   }
 
-  async resolveWebviewView(view) {
-    say(`resolveWebviewView (visible=${view.visible})`);
-    this.view = view;
-    this.lastAsk = Date.now();
-    view.onDidDispose(() => { say("view disposed"); if (this.view === view) this.view = null; });
-    view.onDidChangeVisibility(() => {
-      say(`visibility ${view.visible}`);
-      if (this.view !== view) return;
-      if (view.visible) this.render();
-      // ponytail: moving the panel to another side can leave the view hidden with no further event; the refresh
-      // button in the panel title (aiStatus.reload) brings it back. Re-showing it automatically stole focus from
-      // the other panel tabs.
-    });
-    view.webview.onDidReceiveMessage(async (m) => {
-      if (!m || m.type !== "api") return;
-      this.lastAsk = Date.now();
-      try {
-        const port = vscode.workspace.getConfiguration("aiStatus").get("port");
-        view.webview.postMessage({ id: m.id, data: JSON.parse(await get(port, "/api")) });
-      } catch (e) {
-        view.webview.postMessage({ id: m.id, error: String(e.message || e) });
-      }
-    });
-    await this.render();
+  getTreeItem(it) {
+    return it;
   }
 
-  // The page asks for data every 3 s. A visible panel that went quiet was recreated blank (moved to another side):
-  // put the page back.
-  watch() {
-    if (this.view && this.view.visible && !this.rendering && Date.now() - (this.lastAsk || 0) > 10000) {
-      say("watchdog: no data request for 10 s, rebuilding");
-      this.lastAsk = Date.now();
-      this.render();
-    }
+  getChildren(it) {
+    return it ? it.children || [] : this.roots;
   }
 
-  async render() {
-    if (!this.view) return;
-    this.rendering = true;
+  async refresh() {
     try {
       const port = await ensureServer(this.context);
-      this.view.webview.options = { enableScripts: true };
-      const html = await page(port);
-      if (this.view) this.view.webview.html = html;
-      say(`rendered (${html.length} chars)`);
+      this.data = JSON.parse(await get(port, "/api"));
+      this.roots = tree(this.data);
     } catch (e) {
-      say(`render failed: ${e.message}`);
-      if (this.view) this.view.webview.html = await page(0, e.message);
-    } finally {
-      this.rendering = false;
+      say(`refresh failed: ${e.message}`);
+      this.roots = [item("AI Status indisponível", { description: e.message, tooltip: e.message, icon: "error" })];
     }
+    this.changed.fire();
   }
 }
 
 function activate(context) {
   log = vscode.window.createOutputChannel("AI Status");
-  context.subscriptions.push(log);
-  say("activated");
   const provider = new Provider(context);
-  context.subscriptions.push(
-    // No retainContextWhenHidden: a retained webview is an overlay that stays behind when the panel is moved.
-    vscode.window.registerWebviewViewProvider("aiStatus.view", provider),
-    vscode.commands.registerCommand("aiStatus.reload", () => { if (provider.view) provider.view.show(true); provider.render(); }),
-    { dispose: clearInterval.bind(null, setInterval(() => provider.watch(), 5000)) }
-  );
+  const view = vscode.window.createTreeView("aiStatus.view", { treeDataProvider: provider });
+  const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  status.command = "aiStatus.view.focus";
+  status.tooltip = "AI Status: uso do plano do Claude Code (5 h · 7 d)";
+  let at = 0;
+  const tick = async (force) => {
+    // ponytail: polls the server every 3 s while the tree is visible, every 30 s (status bar only) otherwise.
+    if (!force && !view.visible && Date.now() - at < 30000) return;
+    at = Date.now();
+    await provider.refresh();
+    status.text = `$(pulse) ${usageText(provider.data) || "AI Status"}`;
+    status.show();
+  };
+  tick(true);
+  const timer = setInterval(tick, 3000);
+  context.subscriptions.push(log, view, status, { dispose: () => clearInterval(timer) },
+    view.onDidChangeVisibility(() => view.visible && tick(true)),
+    vscode.commands.registerCommand("aiStatus.reload", () => tick(true)),
+    vscode.commands.registerCommand("aiStatus.openBrowser", () =>
+      vscode.env.openExternal(vscode.Uri.parse(`http://localhost:${vscode.workspace.getConfiguration("aiStatus").get("port")}/`))));
 }
 
 function deactivate() {
   if (server && server.exitCode === null) server.kill();
 }
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, tree, usageText };

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- The panel is now a native tree (plan usage, background tasks, sessions) instead of a webview, so moving the panel to another side no longer leaves it blank. Click a task to open its log.
+- Plan usage in the status bar (`5h 79% · 7d 51%`).
+- "Open in Browser" button for the full page.
+
 ## 0.3.6
 
 - No more automatic re-show (it pulled focus away from the other panel tabs). After moving the panel, click the refresh button in its title if it stays blank.

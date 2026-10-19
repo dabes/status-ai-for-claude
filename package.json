@@ -2,7 +2,7 @@
   "name": "ai-status-claude-code",
   "displayName": "AI Status for Claude Code",
   "description": "Unofficial. Plan usage (5-hour and weekly limits), the background commands Claude Code launched (with progress) and what each Claude Code session is doing.",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "publisher": "dabes",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -22,7 +22,7 @@
   ],
   "main": "./extension.js",
   "activationEvents": [
-    "onView:aiStatus.view"
+    "onStartupFinished"
   ],
   "contributes": {
     "viewsContainers": {
@@ -37,7 +37,6 @@
     "views": {
       "aiStatus": [
         {
-          "type": "webview",
           "id": "aiStatus.view",
           "name": "AI Status"
         }
@@ -46,8 +45,13 @@
     "commands": [
       {
         "command": "aiStatus.reload",
-        "title": "AI Status: Reload Panel",
+        "title": "AI Status: Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "aiStatus.openBrowser",
+        "title": "AI Status: Open in Browser",
+        "icon": "$(link-external)"
       }
     ],
     "configuration": {
@@ -74,6 +78,11 @@
       "view/title": [
         {
           "command": "aiStatus.reload",
+          "when": "view == aiStatus.view",
+          "group": "navigation"
+        },
+        {
+          "command": "aiStatus.openBrowser",
           "when": "view == aiStatus.view",
           "group": "navigation"
         }
