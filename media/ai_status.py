@@ -24,6 +24,8 @@ import urllib.request
 # Pasta de configuração do Claude Code (CLAUDE_CONFIG_DIR quando definida, senão ~/.claude).
 PROJECTS = pathlib.Path(os.environ.get("CLAUDE_CONFIG_DIR") or pathlib.Path.home() / ".claude") / "projects"
 TASKS = pathlib.Path(tempfile.gettempdir()) / "claude"
+CONFIG = PROJECTS.parent
+USAGE = CONFIG / "ai-status-usage.json"   # gravado por media/statusline.py (statusLine do Claude Code)
 LAUNCH = re.compile(r"(?:running in background with ID: |agentId: )([A-Za-z0-9]{6,})")
 HANDBACK = re.compile(r'<agent-message from="([^"]+)">\s*\[Subagent hand-back\]')
 NOTE = re.compile(r"<task-id>([^<]+)</task-id>.*?<status>([^<]+)</status>(?:.*?<summary>([^<]*)</summary>)?", re.S)
@@ -127,6 +129,32 @@ def agent_state(path):
         if kind and prompt:
             break
     return {"model": model, "action": action[:180], "kind": kind, "prompt": prompt[:140], "age": age, "last": when}
+
+
+def usage():
+    """Limites do plano (5 h e 7 d): percentual usado e quando reinicia. Fonte: o statusline.py (o que o Claude Code
+    passa à linha de status); sem ele, o cache de outra extensão (vscode-claude-status), avisando a idade."""
+    def window(w, pct_key, reset_key, scale=1.0):
+        if not w or w.get(pct_key) is None:
+            return None
+        return {"pct": float(w[pct_key]) * scale, "resets_at": w.get(reset_key)}
+    try:
+        d = json.loads(USAGE.read_text(encoding="utf-8"))
+        rl = d.get("rate_limits") or {}
+        return {"source": "statusline", "updated": d.get("updated"),
+                "five_hour": window(rl.get("five_hour"), "used_percentage", "resets_at"),
+                "seven_day": window(rl.get("seven_day"), "used_percentage", "resets_at")}
+    except (OSError, ValueError):
+        pass
+    try:
+        d = json.loads((CONFIG / "vscode-claude-status-cache.json").read_text(encoding="utf-8"))
+        u = d.get("usageData") or {}
+        updated = time.mktime(time.strptime(d["updatedAt"][:19], "%Y-%m-%dT%H:%M:%S")) - time.timezone if d.get("updatedAt") else None
+        return {"source": "vscode-claude-status", "updated": updated,
+                "five_hour": window({"p": u.get("utilization5h"), "r": u.get("reset5hAt")}, "p", "r", 100.0),
+                "seven_day": window({"p": u.get("utilization7d"), "r": u.get("reset7dAt")}, "p", "r", 100.0)}
+    except (OSError, ValueError, KeyError):
+        return None
 
 
 def agents(rows, days_hours=24):
@@ -316,9 +344,15 @@ pre{white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:var(--mut)}de
 .pct{font-weight:600;font-variant-numeric:tabular-nums}.log{font-size:12px;margin-top:6px;overflow-wrap:anywhere}
 .last{margin-top:6px;padding:6px 8px;background:var(--bg);border-radius:6px;overflow-x:auto;white-space:pre}
 .now{margin-top:6px;padding:6px 8px;background:var(--bg);border-radius:6px;font-size:13px;overflow-wrap:anywhere}
+.usage{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:0 20px 14px}@media (max-width:760px){.usage{grid-template-columns:1fr}}
+.meter{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.meter .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.meter b{font-size:20px;font-variant-numeric:tabular-nums}.meter .bar{height:10px}
+.hi .bar i{background:var(--warn)}.max .bar i{background:var(--fail)}.stale{font-size:12px;color:var(--warn);padding:0 20px 10px}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.chip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;color:var(--mut)}
 </style></head><body><header><h1>AI Status</h1><span class="mut" id="sum"></span>
 <label class="mut"><input type="checkbox" id="all"> mostrar terminadas</label></header>
+<div class="usage" id="usage"></div><div class="stale" id="stale"></div>
 <main><section><h2>Tarefas</h2><div id="list"></div></section><section><h2>Agentes</h2><div id="agents"></div></section></main>
 <script>
 const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -342,8 +376,23 @@ function agent(a){return `
   ${a.action?`<div class="now">${a.kind==='tool'?'▶ ':'💬 '}${esc(a.action)}</div>`:''}
   ${a.prompt?`<div class="log mut">último pedido: ${esc(a.prompt)}</div>`:''}
   <div class="chips"><span class="chip">${a.running} tarefa(s) rodando</span>${a.subagents.map(s=>`<span class="chip">subagente: ${esc(s)}</span>`).join('')}</div></div>`}
+function until(t,now){if(!t)return '';const s=t-now;if(s<=0)return 'reiniciando';
+  const d=new Date(t*1000), hm=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  return 'reinicia '+(s<86400?'em '+ago(s)+' ('+hm+')':d.toLocaleDateString([], {weekday:'short',day:'2-digit'})+' '+hm)}
+function meter(title,w,now){if(!w)return `<div class="meter"><div class="row"><span>${title}</span><span class="mut">sem dado</span></div></div>`;
+  const cls=w.pct>=90?'max':w.pct>=70?'hi':'';
+  return `<div class="meter ${cls}"><div class="row"><span>${title}</span><b>${w.pct.toFixed(0)}%</b></div>
+  <div class="bar"><i style="width:${Math.min(100,w.pct)}%"></i></div><div class="log mut">${until(w.resets_at,now)}</div></div>`}
+function usage(u,now){
+  document.getElementById('usage').innerHTML=u?meter('Sessão (5 h)',u.five_hour,now)+meter('Semana (7 d)',u.seven_day,now)
+    :'<div class="meter mut">Uso do plano indisponível: configure o statusline.py como linha de status do Claude Code.</div>';
+  const age=u&&u.updated?now-u.updated:null;
+  document.getElementById('stale').textContent=!u?'':u.source!=='statusline'?'Dado antigo de outra extensão ('+ago(age)+' atrás); configure o statusline.py para ficar em dia.'
+    :age>900?'Atualizado há '+ago(age)+' (o Claude Code atualiza a cada resposta).':'';
+}
 async function tick(){
   let data;try{data=await (await fetch('api')).json()}catch(e){document.getElementById('sum').textContent='servidor parado';return}
+  usage(data.usage,data.now);
   const rows=data.tasks, all=document.getElementById('all').checked, run=rows.filter(r=>r.status==='rodando');
   const busy=data.agents.filter(a=>a.status==='trabalhando').length;
   document.getElementById('sum').textContent=run.length+' tarefa(s) rodando · '+data.agents.length+' agente(s), '+busy+' trabalhando · '+new Date().toLocaleTimeString();
@@ -361,7 +410,7 @@ def serve(port, days):
         def do_GET(self):
             if self.path.startswith("/api"):
                 rows = snapshot(days)
-                body, kind = json.dumps({"tasks": rows, "agents": agents(rows)}).encode(), "application/json"
+                body, kind = json.dumps({"tasks": rows, "agents": agents(rows), "usage": usage(), "now": time.time()}).encode(), "application/json"
             else:
                 body, kind = PAGE.encode(), "text/html; charset=utf-8"
             self.send_response(200)

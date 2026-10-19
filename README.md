@@ -2,7 +2,7 @@
 
 > **Unofficial.** Not made by, affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
 
-A VS Code panel that shows, in two columns:
+A VS Code panel that shows your **plan usage** at the top (current 5-hour session and current week, with the time each resets), and below it, in two columns:
 
 - **Tasks.** The commands Claude Code launched in the background, including subagents. Each one shows:
   - its status: running, completed, failed, killed or stopped;
@@ -19,6 +19,16 @@ A VS Code panel that shows, in two columns:
 
 - **Logs.** When a command redirects its output (`> file`, `>> file`, `tee file`), the panel reads that file. The progress is the last `N/M` or `NN%` written there, for example `tile 18/93`.
 - **Downloads.** When a command downloads with `curl -o` or `wget -O`, the panel compares the size of the file on disk with the size the server reports.
+
+## Plan usage (5 h / 7 d)
+
+Claude Code passes your plan's usage limits to its **status line** command. The extension ships `media/statusline.py`, which saves those numbers for the panel and prints `5h 6% · 7d 27%` in the status line. To enable it, add this to `~/.claude/settings.json`, using the extension's install path:
+
+```json
+"statusLine": { "type": "command", "command": "python \"<extension folder>/media/statusline.py\"" }
+```
+
+This needs no token and makes no network request: it only uses what Claude Code already hands to the status line. The numbers refresh after each Claude response.
 
 ## Requirements
 
