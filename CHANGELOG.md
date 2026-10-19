@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5
+
+- Moving the panel to another side hid the view for good (VS Code sends no further event): the extension now asks for it back. A refresh button in the panel title rebuilds it by hand. An "AI Status" output channel logs what the panel does.
+
 ## 0.3.3
 
 - Fix for the blank panel after moving it: the webview is no longer retained while hidden (VS Code draws a retained webview as an overlay that does not follow the panel to its new side); it is rebuilt where the panel is.

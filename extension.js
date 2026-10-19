@@ -6,6 +6,8 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 let server = null;
+let log = { appendLine() {} };
+const say = (m) => log.appendLine(`${new Date().toLocaleTimeString()} ${m}`);
 
 function alive(port) {
   return new Promise((resolve) => {
@@ -77,10 +79,18 @@ class Provider {
   }
 
   async resolveWebviewView(view) {
+    say(`resolveWebviewView (visible=${view.visible})`);
     this.view = view;
     this.lastAsk = Date.now();
-    view.onDidDispose(() => { if (this.view === view) this.view = null; });
-    view.onDidChangeVisibility(() => { if (view.visible && this.view === view) this.render(); });
+    view.onDidDispose(() => { say("view disposed"); if (this.view === view) this.view = null; });
+    view.onDidChangeVisibility(() => {
+      say(`visibility ${view.visible}`);
+      if (this.view !== view) return;
+      if (view.visible) return this.render();
+      // Moving the panel to another side hides the view and VS Code never shows it again (no visible/dispose/resolve
+      // event): ask for it back. ponytail: also reopens the panel if it was really closed within these 500 ms.
+      setTimeout(() => { if (this.view === view && !view.visible) { say("still hidden, show()"); view.show(true); } }, 500);
+    });
     view.webview.onDidReceiveMessage(async (m) => {
       if (!m || m.type !== "api") return;
       this.lastAsk = Date.now();
@@ -98,6 +108,7 @@ class Provider {
   // put the page back.
   watch() {
     if (this.view && this.view.visible && !this.rendering && Date.now() - (this.lastAsk || 0) > 10000) {
+      say("watchdog: no data request for 10 s, rebuilding");
       this.lastAsk = Date.now();
       this.render();
     }
@@ -111,7 +122,9 @@ class Provider {
       this.view.webview.options = { enableScripts: true };
       const html = await page(port);
       if (this.view) this.view.webview.html = html;
+      say(`rendered (${html.length} chars)`);
     } catch (e) {
+      say(`render failed: ${e.message}`);
       if (this.view) this.view.webview.html = await page(0, e.message);
     } finally {
       this.rendering = false;
@@ -120,11 +133,14 @@ class Provider {
 }
 
 function activate(context) {
+  log = vscode.window.createOutputChannel("AI Status");
+  context.subscriptions.push(log);
+  say("activated");
   const provider = new Provider(context);
   context.subscriptions.push(
     // No retainContextWhenHidden: a retained webview is an overlay that stays behind when the panel is moved.
     vscode.window.registerWebviewViewProvider("aiStatus.view", provider),
-    vscode.commands.registerCommand("aiStatus.reload", () => provider.render()),
+    vscode.commands.registerCommand("aiStatus.reload", () => { if (provider.view) provider.view.show(true); provider.render(); }),
     { dispose: clearInterval.bind(null, setInterval(() => provider.watch(), 5000)) }
   );
 }

@@ -2,7 +2,7 @@
   "name": "ai-status-claude-code",
   "displayName": "AI Status for Claude Code",
   "description": "Unofficial. Plan usage (5-hour and weekly limits), the background commands Claude Code launched (with progress) and what each Claude Code session is doing.",
-  "version": "0.3.3",
+  "version": "0.3.5",
   "publisher": "dabes",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -46,7 +46,8 @@
     "commands": [
       {
         "command": "aiStatus.reload",
-        "title": "AI Status: Reload Panel"
+        "title": "AI Status: Reload Panel",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -68,6 +69,15 @@
           "description": "How many days of Claude Code sessions to scan for background tasks."
         }
       }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "aiStatus.reload",
+          "when": "view == aiStatus.view",
+          "group": "navigation"
+        }
+      ]
     }
   }
 }
