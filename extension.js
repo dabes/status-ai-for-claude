@@ -71,7 +71,10 @@ function windowOf(w, now) {
 }
 
 function item(label, opts = {}) {
-  const it = new vscode.TreeItem(label, opts.children ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+  const state = !opts.children || !opts.children.length ? vscode.TreeItemCollapsibleState.None
+    : opts.collapsed ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded;
+  const it = new vscode.TreeItem(label, state);
+  if (opts.id) it.id = opts.id;   // keeps what the user expanded or collapsed across refreshes
   it.description = opts.description;
   it.tooltip = opts.tooltip;
   if (opts.icon) it.iconPath = new vscode.ThemeIcon(opts.icon, opts.color && new vscode.ThemeColor(opts.color));
@@ -89,24 +92,32 @@ function meter(title, w, now) {
 
 function tree(d) {
   const now = d.now, u = d.usage || {};
-  const usage = item("Uso do plano", { icon: "pulse", children: [
+  const usage = item("Uso do plano", { id: "usage", icon: "pulse", children: [
     meter("Sessão (5 h)", windowOf(u.five_hour, now), now),
     meter("Semana (7 d)", windowOf(u.seven_day, now), now),
   ] });
-  const running = d.tasks.filter((t) => t.status === "rodando");
-  const recent = d.tasks.filter((t) => t.status !== "rodando").slice(0, 5);
-  const task = (t) => {
+  // Each session's background tasks under it: the running ones and the last 5 finished.
+  const tasksOf = (list) => [...list.filter((t) => t.status === "rodando"), ...list.filter((t) => t.status !== "rodando").slice(0, 5)].map(task);
+  function task(t) {
     const pct = t.status === "rodando" && t.progress && t.progress.pct != null ? `${t.progress.pct.toFixed(0)}%  ` : "";
     const icon = t.status === "rodando" ? "sync~spin" : t.status === "completed" ? "check" : "error";
     return item(t.description || t.command, { description: `${pct}${t.status}`, icon, log: t.log,
       tooltip: [t.command, ...(t.log_tail || [t.last || ""])].join("\n") });
-  };
-  const tasks = item(`Tarefas  (${running.length} rodando)`, { icon: "terminal",
-    children: d.tasks.length ? [...running, ...recent].map(task) : [item("nenhuma", { icon: "circle-slash" })] });
-  const sessions = item(`Sessões  (${d.agents.length})`, { icon: "hubot", children: d.agents.map((a) =>
-    item(`${a.project}: ${a.status}`, { description: a.action, tooltip: `${a.title}\n${a.model}\n${a.action}`,
-      icon: a.status === "trabalhando" ? "loading~spin" : a.status === "parado" ? "debug-pause" : "comment" })) });
-  return [usage, tasks, sessions];
+  }
+  const live = new Set(d.agents.map((a) => a.session));
+  const sessions = d.agents.map((a) => {
+    const mine = d.tasks.filter((t) => t.session === a.session);
+    const running = mine.filter((t) => t.status === "rodando").length;
+    return item(`${a.project}: ${a.status}${running ? `  (${running} rodando)` : ""}`, {
+      id: a.session, description: a.action, tooltip: `${a.title}\n${a.model}\n${a.action}`, children: tasksOf(mine),
+      collapsed: !running, icon: a.status === "trabalhando" ? "loading~spin" : a.status === "parado" ? "debug-pause" : "comment" });
+  });
+  const orphans = d.tasks.filter((t) => !live.has(t.session));
+  if (orphans.length) {
+    sessions.push(item("Sessões inativas", { id: "inactive", icon: "history", children: tasksOf(orphans),
+      collapsed: !orphans.some((t) => t.status === "rodando") }));
+  }
+  return [usage, item(`Sessões  (${d.agents.length})`, { id: "sessions", icon: "hubot", children: sessions })];
 }
 
 function usageText(d) {

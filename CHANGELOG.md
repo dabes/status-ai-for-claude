@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+- Background tasks now sit under the session that launched them (running ones first, then the last 5 finished); tasks of sessions no longer active go under "Sessões inativas". What you expand or collapse is kept across refreshes.
+
 ## 0.4.0
 
 - The panel is now a native tree (plan usage, background tasks, sessions) instead of a webview, so moving the panel to another side no longer leaves it blank. Click a task to open its log.
