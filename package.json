@@ -1,0 +1,35 @@
+{
+  "name": "ai-status-claude-code",
+  "displayName": "AI Status for Claude Code",
+  "description": "Unofficial. A panel showing the background commands Claude Code launched (with progress from their logs and downloads) and what each Claude Code session is doing.",
+  "version": "0.1.0",
+  "publisher": "dabes",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other", "Visualization"],
+  "keywords": ["claude code", "background tasks", "agents", "progress", "dashboard"],
+  "main": "./extension.js",
+  "activationEvents": ["onView:aiStatus.view"],
+  "contributes": {
+    "viewsContainers": {
+      "panel": [{ "id": "aiStatus", "title": "AI Status", "icon": "$(pulse)" }]
+    },
+    "views": {
+      "aiStatus": [{ "type": "webview", "id": "aiStatus.view", "name": "AI Status" }]
+    },
+    "commands": [{ "command": "aiStatus.reload", "title": "AI Status: Reload Panel" }],
+    "configuration": {
+      "title": "AI Status for Claude Code",
+      "properties": {
+        "aiStatus.python": {
+          "type": "string",
+          "default": "",
+          "description": "Python 3 executable used to run the panel server. Empty: \"python\" on Windows, \"python3\" elsewhere."
+        },
+        "aiStatus.port": { "type": "number", "default": 8765, "description": "Local port of the panel server (127.0.0.1 only)." },
+        "aiStatus.days": { "type": "number", "default": 3, "description": "How many days of Claude Code sessions to scan for background tasks." }
+      }
+    }
+  }
+}
