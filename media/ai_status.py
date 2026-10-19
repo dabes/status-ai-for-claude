@@ -441,8 +441,8 @@ function usage(u,now){
   document.getElementById('stale').textContent=u&&age>900?'Atualizado há '+ago(age)+'.':'';
 }
 async function tick(){
-  let data;try{data=await (await fetch(window.AI_STATUS_API||'api')).json()}catch(e){document.getElementById('sum').textContent='servidor parado';return}
-  if(!window.AI_STATUS_API&&window.boot&&data.boot!==window.boot)return location.reload();   // servidor reiniciado (talvez código novo): recarrega a página
+  let data;try{data=window.AI_STATUS_FETCH?await AI_STATUS_FETCH():await (await fetch('api')).json()}catch(e){document.getElementById('sum').textContent='servidor parado';return}
+  if(!window.AI_STATUS_FETCH&&window.boot&&data.boot!==window.boot)return location.reload();   // servidor reiniciado (talvez código novo): recarrega a página
   window.boot=data.boot;
   usage(data.usage,data.now);
   const rows=data.tasks, all=document.getElementById('all').checked, run=rows.filter(r=>r.status==='rodando');
@@ -471,9 +471,6 @@ def serve(port, days):
             self.send_response(200)
             self.send_header("Content-Type", kind)
             self.send_header("Cache-Control", "no-store")
-            origin = self.headers.get("Origin") or ""
-            if origin.startswith("vscode-webview://"):   # só o painel do VS Code lê /api de outra origem
-                self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
             self.wfile.write(body)
 

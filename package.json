@@ -2,7 +2,7 @@
   "name": "ai-status-claude-code",
   "displayName": "AI Status for Claude Code",
   "description": "Unofficial. Plan usage (5-hour and weekly limits), the background commands Claude Code launched (with progress) and what each Claude Code session is doing.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "dabes",
   "license": "MIT",
   "icon": "media/icon.png",

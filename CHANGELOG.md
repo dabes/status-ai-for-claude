@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- The panel gets its data through the extension (webviews may block local network access), and a visible panel that stops asking for data for 10 s is rebuilt, which covers being moved to another side.
+
 ## 0.3.1
 
 - The panel page now lives in the webview itself (no iframe), so moving the panel to another side no longer leaves it blank; it redraws whenever it becomes visible.

@@ -48,17 +48,27 @@ function get(port, urlPath) {
   });
 }
 
-// The server's page goes straight into the webview (no iframe: an iframe to localhost stayed blank after the panel
-// was moved to another side). Its script fetches /api from the server; the server allows only vscode-webview origins.
+// The server's page goes straight into the webview (no iframe). The webview never talks to 127.0.0.1 itself (VS Code
+// webviews may block local network access): the page asks the extension for /api, and the extension fetches it.
+const BRIDGE = `<script>(() => {
+  const vs = acquireVsCodeApi(), waiting = {};
+  let next = 0;
+  addEventListener("message", (e) => { const m = e.data || {}; if (waiting[m.id]) { waiting[m.id](m); delete waiting[m.id]; } });
+  window.AI_STATUS_FETCH = () => new Promise((ok, fail) => {
+    const id = ++next;
+    waiting[id] = (m) => (m.error ? fail(new Error(m.error)) : ok(m.data));
+    vs.postMessage({ id, type: "api" });
+  });
+})()</script>`;
+
 async function page(port, error) {
   if (error) {
     return `<!doctype html><body style="font:13px system-ui;color:var(--vscode-foreground);padding:12px">
       AI Status unavailable: ${String(error).replace(/[<>&]/g, "")}</body>`;
   }
-  const api = `http://127.0.0.1:${port}/api`;
-  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src ${api}; style-src 'unsafe-inline'; script-src 'unsafe-inline';">`;
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">`;
   const html = await get(port, "/");
-  return html.replace("<head>", `<head>${csp}<script>window.AI_STATUS_API=${JSON.stringify(api)}</script>`);
+  return html.replace("<head>", `<head>${csp}${BRIDGE}`);
 }
 
 class Provider {
@@ -68,19 +78,43 @@ class Provider {
 
   async resolveWebviewView(view) {
     this.view = view;
+    this.lastAsk = Date.now();
     view.onDidDispose(() => { if (this.view === view) this.view = null; });
     view.onDidChangeVisibility(() => { if (view.visible && this.view === view) this.render(); });
+    view.webview.onDidReceiveMessage(async (m) => {
+      if (!m || m.type !== "api") return;
+      this.lastAsk = Date.now();
+      try {
+        const port = vscode.workspace.getConfiguration("aiStatus").get("port");
+        view.webview.postMessage({ id: m.id, data: JSON.parse(await get(port, "/api")) });
+      } catch (e) {
+        view.webview.postMessage({ id: m.id, error: String(e.message || e) });
+      }
+    });
     await this.render();
+  }
+
+  // The page asks for data every 3 s. A visible panel that went quiet was recreated blank (moved to another side):
+  // put the page back.
+  watch() {
+    if (this.view && this.view.visible && !this.rendering && Date.now() - (this.lastAsk || 0) > 10000) {
+      this.lastAsk = Date.now();
+      this.render();
+    }
   }
 
   async render() {
     if (!this.view) return;
+    this.rendering = true;
     try {
       const port = await ensureServer(this.context);
       this.view.webview.options = { enableScripts: true };
-      this.view.webview.html = await page(port);
+      const html = await page(port);
+      if (this.view) this.view.webview.html = html;
     } catch (e) {
-      this.view.webview.html = await page(0, e.message);
+      if (this.view) this.view.webview.html = await page(0, e.message);
+    } finally {
+      this.rendering = false;
     }
   }
 }
@@ -89,7 +123,8 @@ function activate(context) {
   const provider = new Provider(context);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("aiStatus.view", provider, { webviewOptions: { retainContextWhenHidden: true } }),
-    vscode.commands.registerCommand("aiStatus.reload", () => provider.render())
+    vscode.commands.registerCommand("aiStatus.reload", () => provider.render()),
+    { dispose: clearInterval.bind(null, setInterval(() => provider.watch(), 5000)) }
   );
 }
 
