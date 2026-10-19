@@ -35,25 +35,30 @@ async function ensureServer(context) {
   throw new Error(`the panel server did not answer on port ${port}. Check that Python 3 is installed (setting aiStatus.python) and the port is free (aiStatus.port).`);
 }
 
-function page(port, error) {
+function get(port, urlPath) {
+  return new Promise((resolve, reject) => {
+    const req = http.get({ host: "127.0.0.1", port, path: urlPath, timeout: 5000 }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve(body));
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
+  });
+}
+
+// The server's page goes straight into the webview (no iframe: an iframe to localhost stayed blank after the panel
+// was moved to another side). Its script fetches /api from the server; the server allows only vscode-webview origins.
+async function page(port, error) {
   if (error) {
     return `<!doctype html><body style="font:13px system-ui;color:var(--vscode-foreground);padding:12px">
       AI Status unavailable: ${String(error).replace(/[<>&]/g, "")}</body>`;
   }
-  const nonce = Math.random().toString(36).slice(2);
-  // Moving the panel (top/bottom/left/right) recreates the webview and the iframe sometimes stays blank: the page
-  // posts "ai-status-ready" on every refresh; with no word for 5 s the iframe is reloaded.
-  return `<!doctype html><html><head><meta charset="utf-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src http://localhost:${port}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
-    <style>html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;overflow:hidden}</style></head>
-    <body><iframe id="f" src="http://localhost:${port}/"></iframe>
-    <script nonce="${nonce}">
-      let last = Date.now();
-      addEventListener("message", (e) => { if (e.data === "ai-status-ready") last = Date.now(); });
-      setInterval(() => {
-        if (Date.now() - last > 5000) { last = Date.now(); document.getElementById("f").src = "http://localhost:${port}/?t=" + last; }
-      }, 1000);
-    </script></body></html>`;
+  const api = `http://127.0.0.1:${port}/api`;
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src ${api}; style-src 'unsafe-inline'; script-src 'unsafe-inline';">`;
+  const html = await get(port, "/");
+  return html.replace("<head>", `<head>${csp}<script>window.AI_STATUS_API=${JSON.stringify(api)}</script>`);
 }
 
 class Provider {
@@ -64,6 +69,7 @@ class Provider {
   async resolveWebviewView(view) {
     this.view = view;
     view.onDidDispose(() => { if (this.view === view) this.view = null; });
+    view.onDidChangeVisibility(() => { if (view.visible && this.view === view) this.render(); });
     await this.render();
   }
 
@@ -71,10 +77,10 @@ class Provider {
     if (!this.view) return;
     try {
       const port = await ensureServer(this.context);
-      this.view.webview.options = { enableScripts: true, portMapping: [{ webviewPort: port, extensionHostPort: port }] };
-      this.view.webview.html = page(port);
+      this.view.webview.options = { enableScripts: true };
+      this.view.webview.html = await page(port);
     } catch (e) {
-      this.view.webview.html = page(0, e.message);
+      this.view.webview.html = await page(0, e.message);
     }
   }
 }

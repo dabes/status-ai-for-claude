@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- The panel page now lives in the webview itself (no iframe), so moving the panel to another side no longer leaves it blank; it redraws whenever it becomes visible.
+
 ## 0.3.0
 
 - Plan usage straight from Claude Code (the same `get_usage` request as its own Usage panel), every 5 minutes: no prompt is sent (cost 0) and Claude Code itself handles the login. Works with Claude Code in VS Code too; the status-line script stays as a fallback.
