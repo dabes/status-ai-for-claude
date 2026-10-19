@@ -10,6 +10,7 @@ Uso:  python ai_status.py [--port 8765] [--days 3]   e abra http://localhost:876
 """
 
 import argparse
+from datetime import datetime
 import html
 import http.server
 import json
@@ -17,6 +18,9 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
+import subprocess
+import threading
 import tempfile
 import time
 import urllib.request
@@ -131,22 +135,76 @@ def agent_state(path):
     return {"model": model, "action": action[:180], "kind": kind, "prompt": prompt[:140], "age": age, "last": when}
 
 
+USAGE_EVERY = 300   # s entre consultas ao Claude Code
+_cli_usage = {}
+
+
+def cli_usage_once():
+    """Pergunta os limites ao próprio Claude Code (o pedido get_usage, o mesmo do painel Usage da extensão oficial):
+    nenhum prompt vai ao modelo (custo 0) e quem lê a credencial é o Claude Code, não este script."""
+    exe = shutil.which("claude") or str(pathlib.Path.home() / ".local" / "bin" / ("claude.exe" if os.name == "nt" else "claude"))
+    args = [exe, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+            "--no-session-persistence", "--setting-sources", ""]   # sem hooks, sem gravar sessão
+    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         text=True, encoding="utf-8", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    timer = threading.Timer(30, p.kill)
+    timer.start()
+    try:
+        p.stdin.write(json.dumps({"type": "control_request", "request_id": "ai-status",
+                                  "request": {"subtype": "get_usage"}}) + "\n")
+        p.stdin.flush()
+        for line in p.stdout:
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if m.get("type") == "control_response":
+                return (m.get("response") or {}).get("response") or {}
+    finally:
+        timer.cancel()
+        p.kill()
+    return {}
+
+
+def cli_window(w):
+    if not w or w.get("utilization") is None:
+        return None
+    reset = w.get("resets_at")
+    if isinstance(reset, str):
+        reset = datetime.fromisoformat(reset.replace("Z", "+00:00")).timestamp()
+    return {"pct": float(w["utilization"]), "resets_at": reset}
+
+
+def cli_usage_loop():
+    while True:
+        try:
+            rl = cli_usage_once().get("rate_limits") or {}
+            if rl.get("five_hour") or rl.get("seven_day"):
+                _cli_usage.update(source="claude", updated=time.time(),
+                                  five_hour=cli_window(rl.get("five_hour")), seven_day=cli_window(rl.get("seven_day")))
+        except (OSError, ValueError):
+            pass   # Claude Code ausente ou deslogado: fica o último dado (ou o da linha de status)
+        time.sleep(USAGE_EVERY)
+
+
 def usage():
-    """Limites do plano (5 h e 7 d): percentual usado e quando reinicia. Fonte única: o statusline.py (o que o Claude
-    Code de terminal passa à linha de status)."""
+    """Limites do plano (5 h e 7 d): percentual usado e quando reinicia. Do Claude Code (cli_usage_loop) ou, sem ele,
+    do statusline.py (o que o Claude Code de terminal passa à linha de status); o mais recente vence."""
     def window(w, pct_key, reset_key, scale=1.0):
         if not w or w.get(pct_key) is None:
             return None
         return {"pct": float(w[pct_key]) * scale, "resets_at": w.get(reset_key)}
+    best = dict(_cli_usage) or None
     try:
         d = json.loads(USAGE.read_text(encoding="utf-8"))
         rl = d.get("rate_limits") or {}
-        return {"source": "statusline", "updated": d.get("updated"),
-                "five_hour": window(rl.get("five_hour"), "used_percentage", "resets_at"),
-                "seven_day": window(rl.get("seven_day"), "used_percentage", "resets_at")}
+        if not best or (d.get("updated") or 0) > best["updated"]:
+            best = {"source": "statusline", "updated": d.get("updated"),
+                    "five_hour": window(rl.get("five_hour"), "used_percentage", "resets_at"),
+                    "seven_day": window(rl.get("seven_day"), "used_percentage", "resets_at")}
     except (OSError, ValueError):
         pass
-    return None   # sem linha de status (Claude Code no VS Code não a roda): não há fonte confiável
+    return best
 
 
 def agents(rows, days_hours=24):
@@ -378,12 +436,15 @@ function meter(title,w,now){if(w&&w.resets_at&&w.resets_at<now)w=null;   // jane
   <div class="bar"><i style="width:${Math.min(100,w.pct)}%"></i></div><div class="log mut">${until(w.resets_at,now)}</div></div>`}
 function usage(u,now){
   document.getElementById('usage').innerHTML=u?meter('Sessão (5 h)',u.five_hour,now)+meter('Semana (7 d)',u.seven_day,now)
-    :'<div class="meter mut">Uso do plano: só disponível quando o Claude Code roda no terminal com o statusline.py como linha de status. No VS Code, veja o painel Usage do próprio Claude Code.</div>';
+    :'<div class="meter mut">Uso do plano: consultando o Claude Code (precisa estar instalado e logado).</div>';
   const age=u&&u.updated?now-u.updated:null;
-  document.getElementById('stale').textContent=u&&age>900?'Atualizado há '+ago(age)+' (vem da última resposta do Claude Code no terminal).':'';
+  document.getElementById('stale').textContent=u&&age>900?'Atualizado há '+ago(age)+'.':'';
 }
 async function tick(){
   let data;try{data=await (await fetch('api')).json()}catch(e){document.getElementById('sum').textContent='servidor parado';return}
+  try{parent.postMessage('ai-status-ready','*')}catch(e){}
+  if(window.boot&&data.boot!==window.boot)return location.reload();   // servidor reiniciado (talvez código novo): recarrega a página
+  window.boot=data.boot;
   usage(data.usage,data.now);
   const rows=data.tasks, all=document.getElementById('all').checked, run=rows.filter(r=>r.status==='rodando');
   const busy=data.agents.filter(a=>a.status==='trabalhando').length;
@@ -397,12 +458,15 @@ document.getElementById('all').onchange=tick;tick();setInterval(tick,3000);
 </script></body></html>"""
 
 
+BOOT = time.time()
+
+
 def serve(port, days):
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path.startswith("/api"):
                 rows = snapshot(days)
-                body, kind = json.dumps({"tasks": rows, "agents": agents(rows), "usage": usage(), "now": time.time()}).encode(), "application/json"
+                body, kind = json.dumps({"tasks": rows, "agents": agents(rows), "usage": usage(), "now": time.time(), "boot": BOOT}).encode(), "application/json"
             else:
                 body, kind = PAGE.encode(), "text/html; charset=utf-8"
             self.send_response(200)
@@ -414,6 +478,7 @@ def serve(port, days):
         def log_message(self, *a):
             pass
 
+    threading.Thread(target=cli_usage_loop, daemon=True).start()
     print(f"Painel em http://localhost:{port}  (Ctrl+C para parar)")
     http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()  # ponytail: só localhost, sem login
 
@@ -450,6 +515,8 @@ def selftest():
         js = pathlib.Path(tempfile.mkdtemp()) / "page.js"
         js.write_text(PAGE[PAGE.index("<script>") + 8:PAGE.index("</script>")], encoding="utf-8")
         assert subprocess.run(["node", "--check", str(js)], capture_output=True).returncode == 0, "JS da página com erro de sintaxe"
+    w = cli_window({"utilization": 77, "resets_at": "2026-10-19T13:20:00.052350+00:00"})
+    assert w["pct"] == 77.0 and abs(w["resets_at"] - 1792416000.05235) < 1, w
     print("BG_DASHBOARD_OK")
 
 

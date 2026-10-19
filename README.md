@@ -22,15 +22,15 @@ A VS Code panel that shows your **plan usage** at the top (current 5-hour sessio
 
 ## Plan usage (5 h / 7 d)
 
-Claude Code passes your plan's usage limits to its **status line** command. The extension ships `media/statusline.py`, which saves those numbers for the panel and prints `5h 6% · 7d 27%` in the status line. To enable it, add this to `~/.claude/settings.json`, using the extension's install path:
+Every 5 minutes the panel asks Claude Code for your plan's limits, using the same `get_usage` request that feeds Claude Code's own **Usage** view: it starts `claude` with no prompt, sends that one request and closes it. Nothing goes to the model (cost 0, no tokens), and Claude Code handles the login itself; the panel never reads your credentials. It needs the `claude` command installed and logged in.
+
+As a fallback (or for updates after every response in the terminal), `media/statusline.py` can be Claude Code's status line. It saves the numbers it receives and prints `5h 6% · 7d 27%`:
 
 ```json
 "statusLine": { "type": "command", "command": "python \"<extension folder>/media/statusline.py\"" }
 ```
 
-This needs no token and makes no network request: it only uses what Claude Code already hands to the status line. The numbers refresh after each Claude response.
-
-**Limitation:** Claude Code runs the status line only in the terminal (`claude`), not in its VS Code panel. If you only use Claude Code inside VS Code, the usage bars stay empty; use Claude Code's own **Usage** view there. The panel never shows usage from an older window: once a window has reset, its bar stays empty until fresh numbers arrive.
+The newest of the two wins. A window that has already reset shows no number until fresh data arrives.
 
 ## Requirements
 

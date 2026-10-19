@@ -40,10 +40,20 @@ function page(port, error) {
     return `<!doctype html><body style="font:13px system-ui;color:var(--vscode-foreground);padding:12px">
       AI Status unavailable: ${String(error).replace(/[<>&]/g, "")}</body>`;
   }
+  const nonce = Math.random().toString(36).slice(2);
+  // Moving the panel (top/bottom/left/right) recreates the webview and the iframe sometimes stays blank: the page
+  // posts "ai-status-ready" on every refresh; with no word for 5 s the iframe is reloaded.
   return `<!doctype html><html><head><meta charset="utf-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src http://localhost:${port}; style-src 'unsafe-inline';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src http://localhost:${port}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
     <style>html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;overflow:hidden}</style></head>
-    <body><iframe src="http://localhost:${port}/"></iframe></body></html>`;
+    <body><iframe id="f" src="http://localhost:${port}/"></iframe>
+    <script nonce="${nonce}">
+      let last = Date.now();
+      addEventListener("message", (e) => { if (e.data === "ai-status-ready") last = Date.now(); });
+      setInterval(() => {
+        if (Date.now() - last > 5000) { last = Date.now(); document.getElementById("f").src = "http://localhost:${port}/?t=" + last; }
+      }, 1000);
+    </script></body></html>`;
 }
 
 class Provider {
@@ -53,6 +63,7 @@ class Provider {
 
   async resolveWebviewView(view) {
     this.view = view;
+    view.onDidDispose(() => { if (this.view === view) this.view = null; });
     await this.render();
   }
 
