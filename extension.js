@@ -1,4 +1,4 @@
-// AI Status for Claude Code: a native tree (usage, background tasks, sessions) and a status-bar item, fed by /api of
+// Status AI for Claude: a native tree (usage, background tasks, sessions) and a status-bar item, fed by /api of
 // media/ai_status.py (a local, read-only Python server). Reuses a server already listening on the port; otherwise
 // starts one and stops it when VS Code closes. A tree, not a webview: a webview view in the panel stayed blank after
 // the panel was moved to another side (VS Code leaves its overlay behind and sends no further event).

@@ -1,4 +1,4 @@
-# AI Status for Claude Code
+# Status AI for Claude
 
 > **Unofficial.** Not made by, affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
 

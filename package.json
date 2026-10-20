@@ -1,9 +1,9 @@
 {
-  "name": "ai-status-claude-code",
-  "displayName": "AI Status for Claude Code",
+  "name": "status-ai-for-claude",
+  "displayName": "Status AI for Claude",
   "description": "Unofficial. Plan usage (5-hour and weekly limits), the background commands Claude Code launched (with progress) and what each Claude Code session is doing.",
   "version": "0.4.1",
-  "publisher": "dabes",
+  "publisher": "xpree",
   "license": "MIT",
   "icon": "media/icon.png",
   "engines": {
@@ -55,7 +55,7 @@
       }
     ],
     "configuration": {
-      "title": "AI Status for Claude Code",
+      "title": "Status AI for Claude",
       "properties": {
         "aiStatus.python": {
           "type": "string",
