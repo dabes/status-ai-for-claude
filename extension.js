@@ -12,21 +12,42 @@ let server = null;
 let log = { appendLine() {} };
 const say = (m) => log.appendLine(`${new Date().toLocaleTimeString()} ${m}`);
 
+// The server's {version, pid} when it answers, else false. A pre-0.5.1 server answers without them.
 function alive(port) {
   return new Promise((resolve) => {
     const req = http.get({ host: "127.0.0.1", port, path: "/api", timeout: 3000 }, (res) => {
-      res.resume();
-      resolve(res.statusCode === 200);
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (body += c));
+      res.on("end", () => {
+        if (res.statusCode !== 200) return resolve(false);
+        try { const d = JSON.parse(body); resolve({ version: d.version || "0", pid: d.pid }); } catch { resolve(false); }
+      });
     });
     req.on("error", () => resolve(false));
     req.on("timeout", () => { req.destroy(); resolve(false); });
   });
 }
 
+function older(a, b) {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+  return false;
+}
+
 async function ensureServer(context) {
   const cfg = vscode.workspace.getConfiguration("aiStatus");
   const port = cfg.get("port");
-  if (await alive(port)) return port;
+  const mine = context.extension.packageJSON.version;
+  const running = await alive(port);
+  // A server left by another window on an older version lacks newer routes (/api/usage): replace it. A newer one
+  // is kept, so two windows on different versions don't keep killing each other's server.
+  if (running && older(running.version, mine)) {
+    if (!running.pid) throw new Error(`an older AI Status server (before 0.5.1) is on port ${port}. Reload the other VS Code windows (Developer: Reload Window) to stop it.`);
+    say(`replacing server ${running.version} (pid ${running.pid}) with ${mine}`);
+    try { process.kill(running.pid); } catch {}
+    for (let i = 0; i < 20 && (await alive(port)); i++) await new Promise((r) => setTimeout(r, 250));
+  } else if (running) return port;
   if (!server || server.exitCode !== null) {
     const python = cfg.get("python") || (process.platform === "win32" ? "python" : "python3");
     const script = path.join(context.extensionPath, "media", "ai_status.py");

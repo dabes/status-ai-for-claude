@@ -642,6 +642,10 @@ tick();setInterval(tick,30000);
 
 
 BOOT = time.time()
+try:   # a extensão compara com a sua: um servidor mais antigo (de outra janela) é trocado
+    VERSION = json.loads((pathlib.Path(__file__).resolve().parent.parent / "package.json").read_text(encoding="utf-8"))["version"]
+except (OSError, ValueError, KeyError):
+    VERSION = ""
 
 
 def serve(port, days, usage_days):
@@ -651,7 +655,8 @@ def serve(port, days, usage_days):
                 body, kind = json.dumps(_report.get("u", {})).encode(), "application/json"
             elif self.path.startswith("/api"):
                 rows = snapshot(days)
-                body, kind = json.dumps({"tasks": rows, "agents": agents(rows), "usage": usage(), "now": time.time(), "boot": BOOT}).encode(), "application/json"
+                body, kind = json.dumps({"tasks": rows, "agents": agents(rows), "usage": usage(), "now": time.time(), "boot": BOOT,
+                                   "version": VERSION, "pid": os.getpid()}).encode(), "application/json"
             elif self.path.startswith("/usage"):
                 body, kind = USAGE_PAGE.encode(), "text/html; charset=utf-8"
             else:
