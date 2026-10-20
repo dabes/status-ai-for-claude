@@ -1,8 +1,8 @@
 {
   "name": "status-ai-for-claude",
   "displayName": "Status AI for Claude",
-  "description": "Unofficial. Plan usage (5-hour and weekly limits), the background commands Claude Code launched (with progress) and what each Claude Code session is doing.",
-  "version": "0.4.1",
+  "description": "Unofficial. Plan usage (5-hour and weekly limits), what each Claude Code session is running (foreground and background, with progress) and AI Usage: tokens and cost per day, project, model and tool.",
+  "version": "0.5.0",
   "publisher": "xpree",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -18,7 +18,10 @@
     "background tasks",
     "agents",
     "progress",
-    "dashboard"
+    "dashboard",
+    "usage",
+    "cost",
+    "tokens"
   ],
   "main": "./extension.js",
   "activationEvents": [
@@ -31,6 +34,11 @@
           "id": "aiStatus",
           "title": "AI Status",
           "icon": "$(pulse)"
+        },
+        {
+          "id": "aiUsage",
+          "title": "AI Usage",
+          "icon": "$(graph)"
         }
       ]
     },
@@ -39,6 +47,12 @@
         {
           "id": "aiStatus.view",
           "name": "AI Status"
+        }
+      ],
+      "aiUsage": [
+        {
+          "id": "aiStatus.usage",
+          "name": "AI Usage"
         }
       ]
     },
@@ -52,6 +66,16 @@
         "command": "aiStatus.openBrowser",
         "title": "AI Status: Open in Browser",
         "icon": "$(link-external)"
+      },
+      {
+        "command": "aiStatus.reloadUsage",
+        "title": "AI Usage: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aiStatus.openUsage",
+        "title": "AI Usage: Open Charts",
+        "icon": "$(graph-line)"
       }
     ],
     "configuration": {
@@ -71,6 +95,11 @@
           "type": "number",
           "default": 3,
           "description": "How many days of Claude Code sessions to scan for background tasks."
+        },
+        "aiStatus.usageDays": {
+          "type": "number",
+          "default": 30,
+          "description": "How many days of Claude Code history the AI Usage tab sums (tokens and cost)."
         }
       }
     },
@@ -84,6 +113,16 @@
         {
           "command": "aiStatus.openBrowser",
           "when": "view == aiStatus.view",
+          "group": "navigation"
+        },
+        {
+          "command": "aiStatus.reloadUsage",
+          "when": "view == aiStatus.usage",
+          "group": "navigation"
+        },
+        {
+          "command": "aiStatus.openUsage",
+          "when": "view == aiStatus.usage",
           "group": "navigation"
         }
       ]

@@ -4,7 +4,7 @@
 
 A VS Code panel that shows your **plan usage** at the top (current 5-hour session and current week, with the time each resets), and below it, in two columns:
 
-- **Tasks.** The commands Claude Code launched in the background, including subagents. Each one shows:
+- **Tasks.** What each Claude Code session is running: the tool call it is waiting on right now (a foreground command, a subagent, a file read…), shown as *primeiro plano* with how long it has been running, and the commands it launched in the background, including subagents. Each background task shows:
   - its status: running, completed, failed, killed or stopped;
   - the session that launched it;
   - a progress bar;
@@ -14,6 +14,12 @@ A VS Code panel that shows your **plan usage** at the top (current 5-hour sessio
   - what it is doing right now (the tool it is running, or the start of its last reply);
   - the last request you made;
   - how many tasks it has running.
+
+## AI Usage
+
+A second tab, **AI Usage**, sums the tokens of every model response in your Claude Code histories (sessions and subagents) over the last 30 days (`aiStatus.usageDays`) and shows them per day, project, model, token type (input, output, cache write, cache read) and tool (number of calls). **AI Usage: Open Charts** opens the same data as charts inside VS Code.
+
+The cost is the tokens times the API prices in [LiteLLM's price table](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), the same source ccusage uses, including 1-hour cache writes and fast mode. It is what the usage would cost on the API, not what a Pro/Max plan charges. Offline, the tab shows tokens only. A response the history repeats (one line per content block, or a resumed session) counts once.
 
 ## Where the progress comes from
 
@@ -49,7 +55,7 @@ Everything stays on your machine. The panel only **reads**:
 - the output files of background tasks;
 - the log files those commands write.
 
-It serves the page on `127.0.0.1` only. The single network request it makes is a `HEAD` request to the URL of a download that is in progress, to learn the file's total size.
+It serves the page on `127.0.0.1` only. It makes two kinds of network request: a `HEAD` request to the URL of a download that is in progress, to learn the file's total size, and one download of LiteLLM's public price table (from GitHub) for the AI Usage cost. Nothing about your usage is sent.
 
 ## Settings
 
@@ -58,5 +64,6 @@ It serves the page on `127.0.0.1` only. The single network request it makes is a
 | `aiStatus.python` | `python` (Windows) / `python3` | Python 3 executable |
 | `aiStatus.port` | `8765` | Local port of the panel server |
 | `aiStatus.days` | `3` | Days of sessions to scan for tasks |
+| `aiStatus.usageDays` | `30` | Days of history the AI Usage tab sums |
 
 The interface is currently in Portuguese (pt-BR).

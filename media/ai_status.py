@@ -10,7 +10,7 @@ Uso:  python ai_status.py [--port 8765] [--days 3]   e abra http://localhost:876
 """
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 import html
 import http.server
 import json
@@ -107,6 +107,7 @@ def agent_state(path):
     """O que a sessão está fazendo, pelo fim do histórico: modelo, última ação (ferramenta ou resposta) e último pedido."""
     lines, _, age = tail_of(path, 256000)
     model, action, kind, prompt, when = "", "", "", "", ""
+    done, current, settled = set(), [], False   # current: ferramentas chamadas que ainda não devolveram resultado
     for line in reversed(lines):
         try:
             d = json.loads(line)
@@ -118,6 +119,21 @@ def agent_state(path):
         content = msg.get("content")
         if not when and d.get("timestamp"):
             when = d["timestamp"]
+        for c in content if isinstance(content, list) else []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_result":
+                done.add(c.get("tool_use_id"))
+            elif c.get("type") == "tool_use" and d.get("type") == "assistant" and not settled:
+                inp = c.get("input") or {}
+                if c.get("id") in done:
+                    settled = True   # daqui para trás o turno já terminou
+                elif not inp.get("run_in_background"):   # as de segundo plano já estão em tasks
+                    current.append({"tool": c.get("name"), "started": d.get("timestamp", ""),
+                                    "description": inp.get("description") or inp.get("file_path") or inp.get("query") or "",
+                                    "command": (inp.get("command") or inp.get("prompt") or "")[:2000]})
+        if d.get("type") == "user" and isinstance(content, str):
+            settled = True   # um pedido novo: o que ficou sem resultado antes dele foi interrompido
         if d.get("type") == "assistant" and not kind:
             model = msg.get("model", "")
             parts = content if isinstance(content, list) else []
@@ -130,9 +146,12 @@ def agent_state(path):
                 kind, action = "text", text.strip().splitlines()[0]
         elif d.get("type") == "user" and not prompt and isinstance(content, str) and not content.startswith("<"):
             prompt = content.strip().splitlines()[0] if content.strip() else ""
-        if kind and prompt:
+        if kind and prompt and settled:
             break
-    return {"model": model, "action": action[:180], "kind": kind, "prompt": prompt[:140], "age": age, "last": when}
+    if age is not None and age > 6 * 3600:
+        current = []   # nada escrito há horas: a sessão morreu com a ferramenta aberta
+    return {"model": model, "action": action[:180], "kind": kind, "prompt": prompt[:140], "age": age, "last": when,
+            "current": current[::-1]}
 
 
 USAGE_EVERY = 300   # s entre consultas ao Claude Code
@@ -205,6 +224,125 @@ def usage():
     except (OSError, ValueError):
         pass
     return best
+
+
+# Uso em tokens e custo: todas as respostas do modelo nos históricos (sessões e subagentes), contadas uma vez só
+# (o Claude Code grava a mesma mensagem numa linha por bloco, e a sessão retomada copia o histórico).
+PRICES_URL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+KINDS = ("entrada", "saída", "gravação de cache", "leitura de cache")
+_prices = {}
+_seen = set()
+_offsets = {}
+_buckets = {}   # (dia, projeto, modelo, fast) -> [entrada, saída, cache 5 min, cache 1 h, leitura de cache]
+_tools = {}     # (dia, projeto, ferramenta) -> chamadas
+_report = {}   # "u": o último usage_report, trocado inteiro
+
+
+def scan_usage(path):
+    """Soma o que foi escrito no histórico desde a última leitura."""
+    off = _offsets.get(path, 0)
+    with open(path, "rb") as f:
+        f.seek(off)
+        for raw in f:
+            if not raw.endswith(b"\n"):
+                break   # linha pela metade fica para a próxima
+            off += len(raw)
+            if b'"usage"' not in raw:
+                continue
+            try:
+                d = json.loads(raw)
+            except ValueError:
+                continue
+            msg = d.get("message") or {}
+            u, model, ts = msg.get("usage"), msg.get("model") or "", d.get("timestamp")
+            if d.get("type") != "assistant" or not u or not ts or model.startswith("<"):   # <synthetic>: sem chamada
+                continue
+            day = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+            project = os.path.basename((d.get("cwd") or "").rstrip("\\/")) or path.parent.name
+            for c in msg.get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("id") not in _seen:
+                    _seen.add(c.get("id"))
+                    k = (day, project, c.get("name"))
+                    _tools[k] = _tools.get(k, 0) + 1
+            key = f'{msg.get("id")}:{d.get("requestId")}'
+            if key in _seen:
+                continue
+            _seen.add(key)
+            h1 = (u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0
+            row = (u.get("input_tokens") or 0, u.get("output_tokens") or 0,
+                   (u.get("cache_creation_input_tokens") or 0) - h1, h1, u.get("cache_read_input_tokens") or 0)
+            b = _buckets.setdefault((day, project, model, u.get("speed") == "fast"), [0] * 5)
+            for i, n in enumerate(row):
+                b[i] += n
+    _offsets[path] = off
+
+
+def costs(model, fast, t):
+    """US$ de cada tipo de token (KINDS) pela tabela do LiteLLM (preço de API); None se o modelo não está nela."""
+    p = next((_prices[k] for k in (model, re.sub(r"-\d{8}$", "", model), "anthropic/" + model) if k in _prices), None)
+    if not p:
+        return None
+    w = p.get("cache_creation_input_token_cost") or 0
+    c = [t[0] * (p.get("input_cost_per_token") or 0), t[1] * (p.get("output_cost_per_token") or 0),
+         t[2] * w + t[3] * (p.get("cache_creation_input_token_cost_above_1hr") or w),
+         t[4] * (p.get("cache_read_input_token_cost") or 0)]
+    f = (p.get("provider_specific_entry") or {}).get("fast", 1) if fast else 1
+    return [x * f for x in c]
+
+
+def usage_report(days):
+    start = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
+    groups = {"days": {}, "projects": {}, "models": {}}
+    kinds = [[0, 0.0] for _ in KINDS]
+    unpriced = set()
+    for (day, project, model, fast), t in _buckets.items():
+        if day < start:
+            continue
+        c = costs(model, fast, t)
+        if c is None:
+            unpriced.add(model)
+            c = [0.0] * 4
+        tok = (t[0], t[1], t[2] + t[3], t[4])
+        for g, name in (("days", day), ("projects", project), ("models", model)):
+            r = groups[g].setdefault(name, {"name": name, "cost": 0.0, "tokens": 0})
+            r["cost"] += sum(c)
+            r["tokens"] += sum(tok)
+        for i in range(4):
+            kinds[i][0] += tok[i]
+            kinds[i][1] += c[i]
+    tools = {}
+    for (day, _, name), n in _tools.items():
+        if day >= start:
+            tools[name] = tools.get(name, 0) + n
+    zero = {"cost": 0.0, "tokens": 0}
+    every = [(datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
+    top = lambda g: sorted(groups[g].values(), key=lambda r: (r["cost"], r["tokens"]), reverse=True)
+    return {"period": days, "priced": bool(_prices), "unpriced": sorted(unpriced),
+            "total": {"cost": sum(k[1] for k in kinds), "tokens": sum(k[0] for k in kinds)},
+            "today": groups["days"].get(today, zero),
+            "days": [groups["days"].get(d, dict(zero, name=d)) for d in every],
+            "projects": top("projects"), "models": top("models"),
+            "kinds": [{"name": n, "tokens": k[0], "cost": k[1]} for n, k in zip(KINDS, kinds)],
+            "tools": [{"name": n, "count": c} for n, c in sorted(tools.items(), key=lambda x: -x[1])]}
+
+
+def usage_loop(days):
+    while True:
+        if not _prices:
+            try:
+                _prices.update(json.load(urllib.request.urlopen(PRICES_URL, timeout=30)))
+            except Exception:
+                pass   # offline: só tokens, tenta de novo na próxima volta
+        cutoff = time.time() - days * 86400
+        for path in PROJECTS.rglob("*.jsonl"):
+            try:
+                if path.stat().st_mtime >= cutoff:
+                    scan_usage(path)
+            except OSError:
+                pass
+        _report["u"] = dict(usage_report(days), updated=time.time())
+        time.sleep(60)
 
 
 def agents(rows, days_hours=24):
@@ -457,15 +595,65 @@ document.getElementById('all').onchange=tick;tick();setInterval(tick,3000);
 </script></body></html>"""
 
 
+USAGE_PAGE = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Usage</title><style>
+:root{--bg:#f6f6f4;--card:#fff;--fg:#1c1c1a;--mut:#6b6b66;--line:#e3e2dd;--acc:#2f5fb3}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--fg:#ecebe6;--mut:#9a9993;--line:#33322f;--acc:#8ab4ff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,Segoe UI,sans-serif;padding:14px 20px 24px}
+h1{font-size:18px;margin:0}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px;font-weight:600}
+.mut{color:var(--mut)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:12px 0}
+.kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;font-size:13px;margin:0 0 8px}.row span{overflow-wrap:anywhere}
+.row .bar{grid-column:1/-1;height:6px;background:var(--line);border-radius:3px;overflow:hidden}.row .bar i{display:block;height:100%;background:var(--acc)}
+svg text{fill:var(--mut);font-size:10px}svg rect{fill:var(--acc)}svg rect:hover{opacity:.7}
+</style></head><body><h1>AI Usage</h1><div class="mut" id="sub">carregando…</div>
+<div class="kpis" id="kpis"></div><div class="card"><h2>Por dia</h2><div id="chart"></div></div>
+<div class="grid"><div class="card"><h2>Projetos</h2><div id="projects"></div></div><div class="card"><h2>Modelos</h2><div id="models"></div></div>
+<div class="card"><h2>Tipos de token</h2><div id="kinds"></div></div><div class="card"><h2>Ferramentas (chamadas)</h2><div id="tools"></div></div></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money=c=>'$'+c.toFixed(2);
+const tok=n=>n>=1e9?(n/1e9).toFixed(2)+' B':n>=1e6?(n/1e6).toFixed(1)+' M':n>=1e3?(n/1e3).toFixed(0)+' k':String(Math.round(n));
+function bars(rows,val,label){const max=Math.max(...rows.map(val),1e-9);
+  return rows.map(r=>`<div class="row"><span>${esc(r.name)}</span><span class="mut">${label(r)}</span><div class="bar"><i style="width:${100*val(r)/max}%"></i></div></div>`).join('')||'<p class="mut">Nada no período.</p>'}
+function chart(days,val,label){const H=140,bw=18,W=days.length*bw,max=Math.max(...days.map(val),1e-9),step=Math.ceil(days.length/12);
+  return `<svg viewBox="0 0 ${W} ${H+16}" width="100%" role="img" aria-label="Uso por dia">`+days.map((d,i)=>{const h=Math.round(H*val(d)/max);
+    return `<rect x="${i*bw+2}" y="${H-h}" width="${bw-4}" height="${h}" rx="2"><title>${d.name}: ${label(d)}</title></rect>`
+      +(i%step===0?`<text x="${i*bw+bw/2}" y="${H+12}" text-anchor="middle">${d.name.slice(8)}/${d.name.slice(5,7)}</text>`:'')}).join('')+'</svg>'}
+async function tick(){
+  let u;try{u=await (await fetch('api/usage')).json()}catch(e){$('sub').textContent='servidor parado';return}
+  if(!u.days){$('sub').textContent='calculando (lendo os históricos do Claude Code)…';return}
+  const p=u.priced,val=p?r=>r.cost:r=>r.tokens,label=r=>(p?money(r.cost)+' · ':'')+tok(r.tokens)+' tokens';
+  $('sub').textContent=`Últimos ${u.period} dias · `+(p?'custo a preço de API (tabela LiteLLM), não o que o plano cobra':'sem tabela de preços (offline): só tokens')
+    +(u.unpriced.length?' · sem preço: '+u.unpriced.join(', '):'')+' · atualizado '+new Date(u.updated*1000).toLocaleTimeString();
+  $('kpis').innerHTML=[['Total',u.total],['Hoje',u.today],['Média por dia',{cost:u.total.cost/u.period,tokens:u.total.tokens/u.period}]]
+    .map(([t,r])=>`<div class="card kpi"><span class="mut">${t}</span><b>${p?money(r.cost):tok(r.tokens)}</b><span class="mut">${tok(r.tokens)} tokens</span></div>`).join('');
+  $('chart').innerHTML=chart(u.days,val,label);
+  $('projects').innerHTML=bars(u.projects,val,label);
+  $('models').innerHTML=bars(u.models,val,label);
+  $('kinds').innerHTML=bars(u.kinds,val,label);
+  $('tools').innerHTML=bars(u.tools,r=>r.count,r=>r.count+'');
+}
+tick();setInterval(tick,30000);
+</script></body></html>"""
+
+
 BOOT = time.time()
 
 
-def serve(port, days):
+def serve(port, days, usage_days):
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            if self.path.startswith("/api"):
+            if self.path.startswith("/api/usage"):
+                body, kind = json.dumps(_report.get("u", {})).encode(), "application/json"
+            elif self.path.startswith("/api"):
                 rows = snapshot(days)
                 body, kind = json.dumps({"tasks": rows, "agents": agents(rows), "usage": usage(), "now": time.time(), "boot": BOOT}).encode(), "application/json"
+            elif self.path.startswith("/usage"):
+                body, kind = USAGE_PAGE.encode(), "text/html; charset=utf-8"
             else:
                 body, kind = PAGE.encode(), "text/html; charset=utf-8"
             self.send_response(200)
@@ -478,6 +666,7 @@ def serve(port, days):
             pass
 
     threading.Thread(target=cli_usage_loop, daemon=True).start()
+    threading.Thread(target=usage_loop, args=(usage_days,), daemon=True).start()
     print(f"Painel em http://localhost:{port}  (Ctrl+C para parar)")
     http.server.ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()  # ponytail: só localhost, sem login
 
@@ -512,8 +701,35 @@ def selftest():
     import shutil, subprocess
     if shutil.which("node"):   # o JS da página quebrado deixa o painel em branco sem erro nenhum aqui
         js = pathlib.Path(tempfile.mkdtemp()) / "page.js"
-        js.write_text(PAGE[PAGE.index("<script>") + 8:PAGE.index("</script>")], encoding="utf-8")
-        assert subprocess.run(["node", "--check", str(js)], capture_output=True).returncode == 0, "JS da página com erro de sintaxe"
+        for page in (PAGE, USAGE_PAGE):
+            js.write_text(page[page.index("<script>") + 8:page.index("</script>")], encoding="utf-8")
+            assert subprocess.run(["node", "--check", str(js)], capture_output=True).returncode == 0, "JS da página com erro de sintaxe"
+    # Processo corrente: a ferramenta sem resultado é a que roda; a anterior, já respondida, não.
+    a = pathlib.Path(tempfile.mkdtemp()) / "a.jsonl"
+    a.write_text("".join(json.dumps(l) + "\n" for l in [
+        {"type": "user", "message": {"content": "rode os testes"}},
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "u1", "name": "Read", "input": {"file_path": "x"}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "u1", "content": "ok"}]}},
+        {"type": "assistant", "timestamp": "2026-10-20T10:00:00Z", "message": {"content": [
+            {"type": "tool_use", "id": "u2", "name": "Bash", "input": {"command": "pytest", "description": "Testes"}}]}},
+    ]), encoding="utf-8")
+    cur = agent_state(a)["current"]
+    assert [(c["tool"], c["description"]) for c in cur] == [("Bash", "Testes")], cur
+    # Uso: a mesma mensagem em duas linhas (um bloco por linha) conta uma vez; a ferramenta conta uma vez.
+    usage_line = {"type": "assistant", "timestamp": "2026-10-20T12:00:00Z", "requestId": "r1", "cwd": "C:\\x\\freedom",
+                  "message": {"id": "m1", "model": "claude-x", "content": [{"type": "tool_use", "id": "z1", "name": "Bash"}],
+                              "usage": {"input_tokens": 10, "output_tokens": 100, "cache_creation_input_tokens": 1000,
+                                        "cache_read_input_tokens": 10000, "cache_creation": {"ephemeral_1h_input_tokens": 400}}}}
+    other = dict(usage_line, message=dict(usage_line["message"], content=[{"type": "text", "text": "x"}]))
+    a.write_text(json.dumps(usage_line) + "\n" + json.dumps(other) + "\n" + json.dumps(usage_line), encoding="utf-8")
+    scan_usage(a)   # a terceira linha não tem \\n: fica para a próxima leitura
+    key = next(k for k in _buckets if k[2] == "claude-x")
+    assert key[1] == "freedom" and _buckets[key] == [10, 100, 600, 400, 10000], _buckets
+    assert sum(n for k, n in _tools.items() if k[2] == "Bash") == 1, _tools
+    _prices["claude-x"] = {"input_cost_per_token": 1, "output_cost_per_token": 2, "cache_creation_input_token_cost": 3,
+                           "cache_creation_input_token_cost_above_1hr": 4, "cache_read_input_token_cost": 0.5}
+    assert costs("claude-x-20260101", False, _buckets[key]) == [10, 200, 600 * 3 + 400 * 4, 5000], costs("claude-x", False, _buckets[key])
+    _prices.clear()
     w = cli_window({"utilization": 77, "resets_at": "2026-10-19T13:20:00.052350+00:00"})
     assert w["pct"] == 77.0 and abs(w["resets_at"] - 1792416000.05235) < 1, w
     print("BG_DASHBOARD_OK")
@@ -523,6 +739,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--days", type=float, default=3)
+    ap.add_argument("--usage-days", type=int, default=30)
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
-    selftest() if a.selftest else serve(a.port, a.days)
+    selftest() if a.selftest else serve(a.port, a.days, a.usage_days)

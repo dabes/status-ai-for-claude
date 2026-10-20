@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+
+- Each session also shows what it is running right now in the foreground (the tool call still waiting for its result), not only the background tasks.
+- New **AI Usage** tab: tokens and cost (at API prices, from LiteLLM's table) for the last 30 days, per day, project, model, token type and tool, plus **Open Charts** for the same data as charts.
+
 ## 0.4.1
 
 - Background tasks now sit under the session that launched them (running ones first, then the last 5 finished); tasks of sessions no longer active go under "Sessões inativas". What you expand or collapse is kept across refreshes.
