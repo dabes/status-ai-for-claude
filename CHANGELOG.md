@@ -3,6 +3,7 @@
 ## 0.5.1
 
 - AI Usage no longer hangs on "calculando o uso…" when another VS Code window was still running an older panel server on the same port: the server now reports its version, and an older one is replaced. A server from before 0.5.1 cannot be replaced automatically, so the panel asks you to reload the other windows.
+- The browser page now has two tabs, **AI Status** and **AI Usage**. **Open Charts** opens it on the AI Usage tab.
 
 ## 0.5.0
 

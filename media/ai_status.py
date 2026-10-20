@@ -641,6 +641,30 @@ tick();setInterval(tick,30000);
 </script></body></html>"""
 
 
+# "/": as duas páginas acima em abas. Iframes porque cada uma tem o próprio CSS e JS (nomes repetidos: .row, tick, $...);
+# dentro da aba o título some (FRAMED), a aba já diz o que é. #usage na URL abre direto na aba de uso.
+FRAMED = "<script>if(window!==top)document.documentElement.classList.add('framed')</script><style>.framed h1{display:none}</style>"
+PAGE = PAGE.replace("</head>", FRAMED + "</head>", 1)
+USAGE_PAGE = USAGE_PAGE.replace("</head>", FRAMED + "</head>", 1)
+TABS_PAGE = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Status</title><style>
+:root{--bg:#f6f6f4;--fg:#1c1c1a;--mut:#6b6b66;--line:#e3e2dd;--acc:#2f5fb3}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#ecebe6;--mut:#9a9993;--line:#33322f;--acc:#8ab4ff}}
+html,body{height:100%;margin:0}body{display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,Segoe UI,sans-serif}
+nav{display:flex;gap:4px;padding:10px 20px 0;border-bottom:1px solid var(--line)}
+nav a{padding:6px 14px;color:var(--mut);text-decoration:none;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-1px}
+nav a[aria-selected=true]{color:var(--fg);border-color:var(--acc)}
+iframe{flex:1;border:0;width:100%}iframe[hidden]{display:none}
+</style></head><body><nav role="tablist"><a role="tab" href="#status">AI Status</a><a role="tab" href="#usage">AI Usage</a></nav>
+<iframe id="status" src="status" title="AI Status"></iframe><iframe id="usage" src="usage" title="AI Usage" hidden></iframe>
+<script>
+function show(){const t=location.hash==='#usage'?'usage':'status';
+  for(const f of document.querySelectorAll('iframe'))f.hidden=f.id!==t;
+  for(const a of document.querySelectorAll('nav a'))a.setAttribute('aria-selected',a.hash==='#'+t)}
+addEventListener('hashchange',show);show();
+</script></body></html>"""
+
+
 BOOT = time.time()
 try:   # a extensão compara com a sua: um servidor mais antigo (de outra janela) é trocado
     VERSION = json.loads((pathlib.Path(__file__).resolve().parent.parent / "package.json").read_text(encoding="utf-8"))["version"]
@@ -659,8 +683,10 @@ def serve(port, days, usage_days):
                                    "version": VERSION, "pid": os.getpid()}).encode(), "application/json"
             elif self.path.startswith("/usage"):
                 body, kind = USAGE_PAGE.encode(), "text/html; charset=utf-8"
-            else:
+            elif self.path.startswith("/status"):
                 body, kind = PAGE.encode(), "text/html; charset=utf-8"
+            else:
+                body, kind = TABS_PAGE.encode(), "text/html; charset=utf-8"
             self.send_response(200)
             self.send_header("Content-Type", kind)
             self.send_header("Cache-Control", "no-store")
@@ -706,8 +732,9 @@ def selftest():
     import shutil, subprocess
     if shutil.which("node"):   # o JS da página quebrado deixa o painel em branco sem erro nenhum aqui
         js = pathlib.Path(tempfile.mkdtemp()) / "page.js"
-        for page in (PAGE, USAGE_PAGE):
-            js.write_text(page[page.index("<script>") + 8:page.index("</script>")], encoding="utf-8")
+        for page in (PAGE, USAGE_PAGE, TABS_PAGE):
+            body = page[page.index("<body>"):]
+            js.write_text(body[body.index("<script>") + 8:body.index("</script>")], encoding="utf-8")
             assert subprocess.run(["node", "--check", str(js)], capture_output=True).returncode == 0, "JS da página com erro de sintaxe"
     # Processo corrente: a ferramenta sem resultado é a que roda; a anterior, já respondida, não.
     a = pathlib.Path(tempfile.mkdtemp()) / "a.jsonl"

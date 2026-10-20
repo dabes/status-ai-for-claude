@@ -246,7 +246,7 @@ function activate(context) {
     vscode.commands.registerCommand("aiStatus.reload", () => tick(true)),
     vscode.commands.registerCommand("aiStatus.reloadUsage", () => usageTick(true)),
     vscode.commands.registerCommand("aiStatus.openBrowser", () => vscode.env.openExternal(vscode.Uri.parse(page("")))),
-    vscode.commands.registerCommand("aiStatus.openUsage", () => vscode.commands.executeCommand("simpleBrowser.show", page("usage"))));
+    vscode.commands.registerCommand("aiStatus.openUsage", () => vscode.commands.executeCommand("simpleBrowser.show", page("#usage"))));
 }
 
 function deactivate() {
