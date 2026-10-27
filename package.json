@@ -1,11 +1,23 @@
 {
   "name": "status-ai-for-claude",
   "displayName": "Status AI for Claude",
-  "description": "Unofficial. Plan usage (5-hour and weekly limits), what each Claude Code session is running (foreground and background, with progress) and AI Usage: tokens and cost per day, project, model and tool.",
-  "version": "0.6.3",
+  "description": "See how much of your Claude Code 5-hour and weekly limits is left, and what every session, command and subagent is running, with progress. Plus tokens and cost per day, project and model. Unofficial.",
+  "version": "0.7.0",
   "publisher": "xpree",
   "license": "MIT",
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1f1f1d",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dabes/status-ai-for-claude"
+  },
+  "homepage": "https://github.com/dabes/status-ai-for-claude#readme",
+  "bugs": {
+    "url": "https://github.com/dabes/status-ai-for-claude/issues"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -14,14 +26,21 @@
     "Visualization"
   ],
   "keywords": [
+    "claude",
     "claude code",
-    "background tasks",
+    "anthropic",
+    "rate limit",
+    "usage limit",
+    "plan usage",
+    "token usage",
+    "cost",
+    "tokens",
+    "subagents",
     "agents",
+    "background tasks",
     "progress",
     "dashboard",
-    "usage",
-    "cost",
-    "tokens"
+    "usage"
   ],
   "main": "./extension.js",
   "l10n": "./l10n",
@@ -82,11 +101,6 @@
     "configuration": {
       "title": "Status AI for Claude",
       "properties": {
-        "aiStatus.python": {
-          "type": "string",
-          "default": "",
-          "description": "%cfg.python%"
-        },
         "aiStatus.port": {
           "type": "number",
           "default": 8765,

@@ -7,7 +7,6 @@
   "cmd.openBrowser": "AI Status: Open in Browser",
   "cmd.reloadUsage": "AI Usage: Refresh",
   "cmd.openUsage": "AI Usage: Open Charts",
-  "cfg.python": "Python 3 executable used to run the panel server. Empty: \"python\" on Windows, \"python3\" elsewhere.",
   "cfg.port": "Local port of the panel server (127.0.0.1 only).",
   "cfg.days": "How many days of Claude Code sessions to scan for background tasks.",
   "cfg.usageDays": "How many days of Claude Code history the AI Usage tab sums (tokens and cost)."

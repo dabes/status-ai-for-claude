@@ -1,6 +1,6 @@
 // Status AI for Claude: native trees (plan usage, sessions with their current and background tasks; AI Usage with
 // tokens and cost) and a status-bar item, fed by /api and /api/usage of
-// media/ai_status.py (a local, read-only Python server). Reuses a server already listening on the port; otherwise
+// media/server.js (a local, read-only Node server). Reuses a server already listening on the port; otherwise
 // starts one and stops it when VS Code closes. A tree, not a webview: a webview view in the panel stayed blank after
 // the panel was moved to another side (VS Code leaves its overlay behind and sends no further event).
 const vscode = require("vscode");
@@ -56,17 +56,17 @@ async function ensureServer(context) {
     for (let i = 0; i < 20 && (await alive(port)); i++) await new Promise((r) => setTimeout(r, 250));
   } else if (running) return port;
   if (!server || server.exitCode !== null) {
-    const python = cfg.get("python") || (process.platform === "win32" ? "python" : "python3");
-    const script = path.join(context.extensionPath, "media", "ai_status.py");
-    server = spawn(python, [script, "--port", String(port), "--days", String(cfg.get("days")), "--usage-days", String(cfg.get("usageDays"))],
-      { windowsHide: true, stdio: "ignore" });
-    server.on("error", () => {});
+    // VS Code's own Node (its Electron binary with ELECTRON_RUN_AS_NODE): nothing for the user to install.
+    const script = path.join(context.extensionPath, "media", "server.js");
+    server = spawn(process.execPath, [script, "--port", String(port), "--days", String(cfg.get("days")), "--usage-days", String(cfg.get("usageDays"))],
+      { windowsHide: true, stdio: "ignore", env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
+    server.on("error", (e) => say(`server failed to start: ${e.message}`));
   }
   for (let i = 0; i < 20; i++) {
     if (await alive(port)) return port;
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(L("the panel server did not answer on port {0}. Check that Python 3 is installed (setting aiStatus.python) and the port is free (aiStatus.port).", port));
+  throw new Error(L("the panel server did not answer on port {0}. Check that the port is free (setting aiStatus.port).", port));
 }
 
 function get(port, urlPath) {
@@ -113,11 +113,13 @@ function item(label, opts = {}) {
   return it;
 }
 
-function meter(title, w, now, err) {
-  if (!w) return item(title, { description: err ? L("no data: {0}", err) : L("no data"), tooltip: err, icon: "dashboard" });
+// Every item gets a stable id: without one VS Code keys it by its label, which changes on each refresh ("43%"), and it
+// sometimes leaves the old row painted under the new one.
+function meter(id, title, w, now, err) {
+  if (!w) return item(title, { id, description: err ? L("no data: {0}", err) : L("no data"), tooltip: err, icon: "dashboard" });
   const reset = w.resets_at ? L("resets in {0}", ago(w.resets_at - now)) : "";
   const color = w.pct >= 90 ? "errorForeground" : w.pct >= 70 ? "editorWarning.foreground" : undefined;
-  return item(`${title}  ${w.pct.toFixed(0)}%`, { description: `${bar(w.pct)}  ${reset}`, icon: "dashboard", color });
+  return item(`${title}  ${w.pct.toFixed(0)}%`, { id, description: `${bar(w.pct)}  ${reset}`, icon: "dashboard", color });
 }
 
 const KEEP_DONE = 300;   // s that a finished task stays listed
@@ -125,8 +127,8 @@ const KEEP_DONE = 300;   // s that a finished task stays listed
 function tree(d) {
   const now = d.now, u = d.usage || {};
   const usage = item(L("Plan usage"), { id: "usage", icon: "pulse", children: [
-    meter(L("Session (5 h)"), windowOf(u.five_hour, now), now, d.usage_error),
-    meter(L("Week (7 d)"), windowOf(u.seven_day, now), now, d.usage_error),
+    meter("usage:5h", L("Session (5 h)"), windowOf(u.five_hour, now), now, d.usage_error),
+    meter("usage:7d", L("Week (7 d)"), windowOf(u.seven_day, now), now, d.usage_error),
   ] });
   // Background tasks still running, plus the finished ones for 5 min after they end (then they leave the list).
   const shown = (t) => t.status === "rodando" || t.status === "sem notícia" || (t.ended != null && now - t.ended < KEEP_DONE);
@@ -136,19 +138,19 @@ function tree(d) {
     const when = t.ended != null ? ` · ${L("{0} ago", ago(now - t.ended))}` : "";
     // Running: what it last wrote (the progress line, else the log's or the output's last line), refreshed every poll.
     const line = t.status === "rodando" && ((t.progress && t.progress.text) || (t.log_tail || []).slice(-1)[0] || t.last);
-    return item(t.description || t.command, { description: line ? `${pct}${line.trim().slice(0, 120)}` : `${pct}${shownStatus(t.status)}${when}`, icon, log: t.log,
+    return item(t.description || t.command, { id: `t:${t.session}:${t.id}`, description: line ? `${pct}${line.trim().slice(0, 120)}` : `${pct}${shownStatus(t.status)}${when}`, icon, log: t.log,
       tooltip: [t.command, ...(t.log_tail || [t.last || ""])].join("\n") });
   }
   // The tool call the session is waiting on right now (foreground: Bash without run_in_background, Agent, Read…).
-  const fg = (c) => item(c.description || c.command || c.tool, { icon: "play-circle", color: "charts.green", tooltip: c.command,
+  const fg = (c, id) => item(c.description || c.command || c.tool, { id, icon: "play-circle", color: "charts.green", tooltip: c.command,
     description: `${c.tool} · ${L("foreground")}${c.started ? ` · ${ago(now - Date.parse(c.started) / 1000)}` : ""}` });
   // A session's calls split in two groups: commands (Bash and other tools) and agents (Agent: subagents).
   const groups = (id, current, tasks) => {
     const agent = (x) => x.tool === "Agent";
     const group = (key, name, icon, list) => list.length && item(`${name}  (${list.length})`, { id: `${id}:${key}`, icon, children: list });
     return [
-      group("cmd", L("Commands"), "terminal", [...current.filter((c) => !agent(c)).map(fg), ...tasks.filter((t) => !agent(t)).map(task)]),
-      group("agents", L("Agents"), "hubot", [...current.filter(agent).map(fg), ...tasks.filter(agent).map(task)]),
+      group("cmd", L("Commands"), "terminal", [...current.filter((c) => !agent(c)).map((c, i) => fg(c, `${id}:cmd:f${i}`)), ...tasks.filter((t) => !agent(t)).map(task)]),
+      group("agents", L("Agents"), "hubot", [...current.filter(agent).map((c, i) => fg(c, `${id}:agents:f${i}`)), ...tasks.filter(agent).map(task)]),
     ].filter(Boolean);
   };
   const live = new Set(d.agents.map((a) => a.session));
@@ -173,26 +175,26 @@ const tokens = (n) => n >= 1e9 ? `${(n / 1e9).toFixed(2)} B` : n >= 1e6 ? `${(n 
 
 // AI Usage tab: tokens and cost (API prices) from /api/usage, as bars relative to the largest row of each group.
 function usageTree(u) {
-  if (!u.days) return [item(L("calculating usage…"), { icon: "loading~spin", description: L("reading the Claude Code histories") })];
+  if (!u.days) return [item(L("calculating usage…"), { id: "u-loading", icon: "loading~spin", description: L("reading the Claude Code histories") })];
   const val = (r) => (u.priced ? r.cost : r.tokens);
   const label = (r) => `${u.priced ? `${money(r.cost)} · ` : ""}${tokens(r.tokens)} tokens`;
-  const bars = (rows, name, val, label) => {
+  const bars = (id, rows, name, val, label) => {
     const max = Math.max(...rows.map(val), 1e-9);
-    return rows.map((r) => item(name(r), { description: `${bar((100 * val(r)) / max)}  ${label(r)}` }));
+    return rows.map((r) => item(name(r), { id: `${id}:${r.name}`, description: `${bar((100 * val(r)) / max)}  ${label(r)}` }));
   };
   const group = (id, title, icon, children, collapsed) => item(title, { id, icon, children, collapsed });
   const days = u.days.slice(-14).reverse();
   const weekday = (s) => new Date(`${s}T12:00:00`).toLocaleDateString(vscode.env.language, { weekday: "short", day: "2-digit", month: "2-digit" });
   return [
-    item(`${L("Last {0} days", u.period)}  ${u.priced ? money(u.total.cost) : tokens(u.total.tokens)}`, { icon: "graph",
+    item(`${L("Last {0} days", u.period)}  ${u.priced ? money(u.total.cost) : tokens(u.total.tokens)}`, { id: "u-total", icon: "graph",
       description: `${tokens(u.total.tokens)} tokens · ${L("today {0}", label(u.today))}`,
       tooltip: u.priced ? L("Cost at API prices (LiteLLM table), not what the plan charges.") + (u.unpriced.length ? `\n${L("No price: {0}", u.unpriced.join(", "))}` : "")
         : L("No price table (offline): tokens only.") }),
-    group("u-days", L("Per day (14 d)"), "calendar", bars(days, (r) => weekday(r.name), val, label)),
-    group("u-projects", L("Projects"), "folder", bars(u.projects, (r) => r.name, val, label)),
-    group("u-models", L("Models"), "hubot", bars(u.models, (r) => r.name, val, label), true),
-    group("u-kinds", L("Token types"), "symbol-number", bars(u.kinds, (r) => kindName(r.name), val, label), true),
-    group("u-tools", L("Tools"), "tools", bars(u.tools, (r) => r.name, (r) => r.count, (r) => L("{0} calls", r.count)), true),
+    group("u-days", L("Per day (14 d)"), "calendar", bars("u-days", days, (r) => weekday(r.name), val, label)),
+    group("u-projects", L("Projects"), "folder", bars("u-projects", u.projects, (r) => r.name, val, label)),
+    group("u-models", L("Models"), "hubot", bars("u-models", u.models, (r) => r.name, val, label), true),
+    group("u-kinds", L("Token types"), "symbol-number", bars("u-kinds", u.kinds, (r) => kindName(r.name), val, label), true),
+    group("u-tools", L("Tools"), "tools", bars("u-tools", u.tools, (r) => r.name, (r) => r.count, (r) => L("{0} calls", r.count)), true),
   ];
 }
 
@@ -209,7 +211,7 @@ class Provider {
     this.build = build;
     this.changed = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.changed.event;
-    this.roots = [item(L("loading…"), { icon: "loading~spin" })];
+    this.roots = [item(L("loading…"), { id: "loading", icon: "loading~spin" })];
   }
 
   getTreeItem(it) {
@@ -227,7 +229,7 @@ class Provider {
       this.roots = this.build(this.data);
     } catch (e) {
       say(`refresh failed: ${e.message}`);
-      this.roots = [item(L("AI Status unavailable"), { description: e.message, tooltip: e.message, icon: "error" })];
+      this.roots = [item(L("AI Status unavailable"), { id: "error", description: e.message, tooltip: e.message, icon: "error" })];
     }
     this.changed.fire();
   }

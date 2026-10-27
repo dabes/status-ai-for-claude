@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- **No Python needed.** The panel server is now written in JavaScript and runs on the Node.js that comes with VS Code, so there is nothing to install. The **AI Status: Python** setting is gone. The optional status line script is now `media/statusline.js`, run with `node`.
+- The panel no longer paints text over text (for example a stale *no data* under *Session (5 h) 43%*). Every row now has a stable id, so VS Code updates rows in place instead of redrawing them.
+- Dates and times on the browser page follow the page's language instead of the browser's.
+- A command that ended with `[exited …]` or `[killed]` now gets its end time, so it leaves the list 5 minutes later like the others.
+- Marketplace page: animated demo, clearer description and more search keywords.
+
 ## 0.6.3
 
 - The browser page opens in VS Code's display language and has a language selector (Auto, English, Português) next to the tabs. The choice is remembered for both tabs.

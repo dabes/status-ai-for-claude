@@ -1,3 +1,4 @@
 *.vsix
 __pycache__/
 node_modules/
+l10n/bundle.l10n.en-us.json

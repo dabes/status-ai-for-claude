@@ -2,6 +2,10 @@
 
 > **Unofficial.** Not made by, affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
 
+See how much of your Claude Code 5-hour and weekly limits is left, and what every session, command and subagent is running, without leaving VS Code. Nothing to install: it runs on the Node.js that comes with VS Code.
+
+![A background command's progress updating live, then the AI Usage tab with cost per day](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/demo.gif)
+
 A VS Code panel that shows your **plan usage** at the top (current 5-hour session and current week, with the time each resets). Below it is every Claude Code session active in the last 24 hours. Each session shows:
 
 - its status, model and how many tasks it has running;
@@ -37,7 +41,7 @@ The English text lives in the code. Each translation is a file named after the V
 
 1. Copy `package.nls.pt-br.json` to `package.nls.<id>.json` and translate the values. It holds the command titles and setting descriptions.
 2. Copy `l10n/bundle.l10n.pt-br.json` to `l10n/bundle.l10n.<id>.json` and translate the values. It holds the panel text. Keep the keys and placeholders such as `{0}` as they are.
-3. For the browser page, add the language to the `I18N` script in `media/ai_status.py`. Today it holds only English and Portuguese, in the `T(en, pt)` calls and the `data-pt` attributes.
+3. For the browser page, add the language to the script in `media/pages/head.html`, plus the `T(en, pt)` calls and `data-pt` attributes in the other files of `media/pages`. Today they hold only English and Portuguese.
 
 ## AI Usage
 
@@ -54,22 +58,22 @@ The cost is the tokens times the API prices in [LiteLLM's price table](https://g
 
 Every 5 minutes the panel asks Claude Code for your plan's limits, using the same `get_usage` request that feeds Claude Code's own **Usage** view: it starts `claude` with no prompt, sends that one request and closes it. Nothing goes to the model (cost 0, no tokens), and Claude Code handles the login itself; the panel never reads your credentials. It needs the `claude` command installed and logged in.
 
-As a fallback (or for updates after every response in the terminal), `media/statusline.py` can be Claude Code's status line. It saves the numbers it receives and prints `5h 6% · 7d 27%`:
+As a fallback (or for updates after every response in the terminal), `media/statusline.js` can be Claude Code's status line. It saves the numbers it receives and prints `5h 6% · 7d 27%`:
 
 ```json
-"statusLine": { "type": "command", "command": "python \"<extension folder>/media/statusline.py\"" }
+"statusLine": { "type": "command", "command": "node \"<extension folder>/media/statusline.js\"" }
 ```
 
 The newest of the two wins. A window that has already reset shows no number until fresh data arrives.
 
 ## Requirements
 
-- Python 3 on `PATH`. If it isn't there, set **AI Status: Python** to the executable. The panel server uses only the standard library.
+- Nothing to install. The panel server runs on the Node.js that comes with VS Code and uses only its standard library.
 - Claude Code, which writes the session histories the panel reads from `~/.claude/projects`, or from `CLAUDE_CONFIG_DIR` when that is set.
 
 ## Usage
 
-Open the **AI Status** tab in the bottom panel, next to Terminal and Output. The panel refreshes every 3 seconds. If it gets stuck, run **AI Status: Reload Panel**.
+Open the **AI Status** tab in the bottom panel, next to Terminal and Output. The panel refreshes every 3 seconds. If it gets stuck, run **AI Status: Refresh**.
 
 ## Privacy
 
@@ -85,7 +89,6 @@ It serves the page on `127.0.0.1` only. It makes two kinds of network request: a
 
 | Setting | Default | |
 |---|---|---|
-| `aiStatus.python` | `python` (Windows) / `python3` | Python 3 executable |
 | `aiStatus.port` | `8765` | Local port of the panel server |
 | `aiStatus.days` | `3` | Days of sessions to scan for tasks |
 | `aiStatus.usageDays` | `30` | Days of history the AI Usage tab sums |

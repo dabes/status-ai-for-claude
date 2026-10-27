@@ -1,0 +1,105 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Status</title><style>
+:root{--bg:#f6f6f4;--card:#fff;--fg:#1c1c1a;--mut:#6b6b66;--line:#e3e2dd;--run:#1f7a4d;--done:#5b5b57;--fail:#b3261e;--warn:#9a6a00;--wait:#2f5fb3}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--fg:#ecebe6;--mut:#9a9993;--line:#33322f;--run:#4fbf87;--done:#a3a29c;--fail:#ff8a80;--warn:#e0b44a;--wait:#8ab4ff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,Segoe UI,sans-serif}
+header{padding:14px 20px;display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}h1{font-size:18px;margin:0}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px;font-weight:600}
+h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:12px 0 2px;font-weight:600}
+.mut{color:var(--mut)}label{margin-left:auto}
+main{padding:0 20px 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:0 0 10px;min-width:0}
+summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}
+.sess>summary::before{content:'▸';color:var(--mut);margin-right:6px}.sess[open]>summary::before{content:'▾'}
+.top{display:flex;gap:8px 10px;align-items:baseline;flex-wrap:wrap}.st{font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.rodando,.trabalhando{color:var(--run)}.completed{color:var(--done)}.failed,.killed{color:var(--fail)}.stopped,.sem,.parado,.esperando{color:var(--warn)}.aguardando{color:var(--wait)}
+.desc{font-weight:600;overflow-wrap:anywhere}.small{font-size:12px}code,pre{font:12px/1.4 ui-monospace,Consolas,monospace}
+pre{white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:var(--mut)}details.more>summary{color:var(--mut);font-size:12px;margin-top:4px}
+.item{border-top:1px solid var(--line);padding:8px 0 8px 22px;position:relative}.item>.ico{position:absolute;left:2px;top:8px;width:16px;text-align:center}
+.fg>.ico{color:var(--run)}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:var(--run)}
+.pct{font-weight:600;font-variant-numeric:tabular-nums}.log{font-size:12px;margin-top:4px;overflow-wrap:anywhere}
+.last{margin-top:4px;padding:5px 8px;background:var(--bg);border-radius:6px;overflow-x:auto;white-space:pre}
+.now{margin-top:6px;padding:6px 8px;background:var(--bg);border-radius:6px;font-size:13px;overflow-wrap:anywhere}
+.usage{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:0 20px 14px}@media (max-width:760px){.usage{grid-template-columns:1fr}}
+.meter{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.meter .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
+.meter b{font-size:20px;font-variant-numeric:tabular-nums}.meter .bar{height:10px}
+.hi .bar i{background:var(--warn)}.max .bar i{background:var(--fail)}.stale{font-size:12px;color:var(--warn);padding:0 20px 10px}
+</style></head><body><header><h1>AI Status</h1><span class="mut" id="sum"></span>
+<label class="mut"><input type="checkbox" id="all"> <span data-pt="mostrar terminadas">show finished</span></label></header>
+<h2 style="padding:0 20px" data-pt="Uso do plano">Plan usage</h2>
+<div class="usage" id="usage"></div><div class="stale" id="stale"></div>
+<main><h2 id="sessTitle"></h2><div id="sessions"></div></main>
+<script>
+// Mesma estrutura da árvore da extensão: uso do plano; sessões, cada uma com Comandos e Agentes (primeiro plano e
+// segundo plano juntos); sessões inativas. Tarefa terminada some 5 min depois do fim (a não ser com "mostrar terminadas").
+const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ago=s=>s==null?'':s<90?Math.round(s)+' s':s<5400?Math.round(s/60)+' min':(s/3600).toFixed(1)+' h';
+const agoT=s=>T(ago(s)+' ago','há '+ago(s));
+const NL=String.fromCharCode(10), KEEP_DONE=300;
+const opened=new Map();   // o que o usuário abriu ou fechou (chave -> aberto), mantido entre as atualizações
+document.addEventListener('click',e=>{const s=e.target.closest('summary'),d=s&&s.parentElement;if(d&&d.dataset.k)opened.set(d.dataset.k,!d.open)});
+const isOpen=(k,def)=>opened.has(k)?opened.get(k):def;
+function more(k,label,body){return `<details class="more" data-k="${esc(k)}" ${isOpen(k,false)?'open':''}><summary>${label}</summary>${body}</details>`}
+function task(r,now){const run=r.status==='rodando';
+  const line=run&&((r.progress&&r.progress.text)||r.log_tail.slice(-1)[0]||r.last);
+  const ico=run?'⟳':r.status==='completed'?'✓':r.status==='sem notícia'?'?':'✕';
+  return `<div class="item"><span class="ico st ${esc(r.status.split(' ')[0])}">${ico}</span>
+  <div class="top"><span class="desc">${esc(r.description||r.command)}</span><span class="st ${esc(r.status.split(' ')[0])}">${esc(S(r.status))}</span>
+  ${r.ended!=null?`<span class="mut small">${agoT(now-r.ended)}</span>`:''}</div>
+  ${r.summary?`<div class="mut small">${esc(r.summary)}</div>`:''}
+  ${run&&r.progress?`<div class="bar"><i style="width:${Math.min(100,r.progress.pct)}%"></i></div>`:''}
+  ${line?`<div class="last"><code>${run&&r.progress?`<span class="pct">${r.progress.pct.toFixed(1)}%</span> `:''}${esc(line.trim())}</code></div>`:''}
+  ${more('t:'+r.id,`${T('command','comando')} (${esc(r.tool)}) · <code>${esc(r.id)}</code>`,`<pre>${esc(r.command)}</pre>`
+    +(r.log_tail.length?`<div class="last"><code>${r.log_tail.map(esc).join(NL)}</code></div><div class="log mut">log: ${esc(r.log)}</div>`:'')
+    +`<div class="log mut">${T('started','início')} ${esc((r.started||'').replace('T',' ').slice(0,19))} UTC${r.age!=null?' · '+T('written '+ago(r.age)+' ago','escrito há '+ago(r.age)):''}</div>`)}</div>`}
+function fg(c,now,k){return `<div class="item fg"><span class="ico">▶</span>
+  <div class="top"><span class="desc">${esc(c.description||c.command||c.tool)}</span>
+  <span class="mut small">${esc(c.tool)} · ${T('foreground','primeiro plano')}${c.started?' · '+ago(now-Date.parse(c.started)/1000):''}</span></div>
+  ${c.command?more(k,T('command','comando'),`<pre>${esc(c.command)}</pre>`):''}</div>`}
+function groups(id,current,tasks,now){const agent=x=>x.tool==='Agent';
+  const group=(name,cur,list)=>cur.length+list.length?`<h3>${name}  (${cur.length+list.length})</h3>`
+    +cur.map((c,i)=>fg(c,now,`f:${id}:${name}:${i}`)).join('')+list.map(r=>task(r,now)).join(''):'';
+  return group(T('Commands','Comandos'),current.filter(c=>!agent(c)),tasks.filter(t=>!agent(t)))
+    +group(T('Agents','Agentes'),current.filter(agent),tasks.filter(agent))}
+function session(a,tasks,now){const cur=a.current||[], running=tasks.filter(t=>t.status==='rodando').length+cur.length, k='s:'+a.session;
+  return `<details class="card sess" data-k="${esc(k)}" ${isOpen(k,running>0)?'open':''}><summary><span class="top" style="display:inline-flex">
+  <span class="desc">${esc(a.project)}</span><span class="st ${esc(a.status.split(' ')[0])}">${esc(S(a.status))}</span>
+  ${running?`<span class="mut">(${running} ${T('running','rodando')})</span>`:''}
+  <span class="mut small">${esc(a.model)} · ${agoT(a.age)} · <code>${esc(a.session.slice(0,8))}</code></span></span></summary>
+  ${a.title?`<div class="mut small">${esc(a.title)}</div>`:''}
+  ${a.action?`<div class="now">${a.kind==='tool'?'▶ ':'💬 '}${esc(a.action)}</div>`:''}
+  ${a.prompt?`<div class="log mut">${T('last request','último pedido')}: ${esc(a.prompt)}</div>`:''}
+  ${groups(a.session,cur,tasks,now)}</details>`}
+function until(t,now){if(!t)return '';const s=t-now;if(s<=0)return T('resetting','reiniciando');
+  const d=new Date(t*1000), hm=d.toLocaleTimeString(LOC, {hour:'2-digit',minute:'2-digit'});
+  return T('resets ','reinicia ')+(s<86400?T('in ','em ')+ago(s)+' ('+hm+')':d.toLocaleDateString(LOC, {weekday:'short',day:'2-digit'})+' '+hm)}
+function meter(title,w,now,err){if(w&&w.resets_at&&w.resets_at<now)w=null;   // janela já reiniciou: o número é de antes
+  if(!w)return `<div class="meter"><div class="row"><span>${title}</span><span class="mut">${T('no data','sem dado')}</span></div>${err?`<div class="log mut">${esc(err)}</div>`:''}</div>`;
+  const cls=w.pct>=90?'max':w.pct>=70?'hi':'';
+  return `<div class="meter ${cls}"><div class="row"><span>${title}</span><b>${w.pct.toFixed(0)}%</b></div>
+  <div class="bar"><i style="width:${Math.min(100,w.pct)}%"></i></div><div class="log mut">${until(w.resets_at,now)}</div></div>`}
+function usage(u,now,err){u=u||{};
+  document.getElementById('usage').innerHTML=meter(T('Session (5 h)','Sessão (5 h)'),u.five_hour,now,err)+meter(T('Week (7 d)','Semana (7 d)'),u.seven_day,now,err);
+  const age=u.updated?now-u.updated:null;
+  document.getElementById('stale').textContent=age>900?T('Updated '+ago(age)+' ago.','Atualizado há '+ago(age)+'.'):'';
+}
+async function tick(){
+  let data;try{data=window.AI_STATUS_FETCH?await AI_STATUS_FETCH():await (await fetch('api')).json()}catch(e){document.getElementById('sum').textContent=T('server stopped','servidor parado');return}
+  if(!window.AI_STATUS_FETCH&&window.boot&&data.boot!==window.boot)return location.reload();   // servidor reiniciado (talvez código novo): recarrega a página
+  window.boot=data.boot;
+  const now=data.now, all=document.getElementById('all').checked;
+  usage(data.usage,now,data.usage_error);
+  const shown=t=>t.status==='rodando'||t.status==='sem notícia'||all||(t.ended!=null&&now-t.ended<KEEP_DONE);
+  const rows=data.tasks.filter(shown), live=new Set(data.agents.map(a=>a.session));
+  const run=data.tasks.filter(r=>r.status==='rodando').length, busy=data.agents.filter(a=>a.status==='trabalhando').length;
+  document.getElementById('sum').textContent=run+T(' task(s) running · ',' tarefa(s) rodando · ')+data.agents.length+T(' session(s), ',' sessão(ões), ')+busy+T(' working · ',' trabalhando · ')+new Date().toLocaleTimeString(LOC);
+  document.getElementById('sessTitle').textContent=T('Sessions','Sessões')+'  ('+data.agents.length+')';
+  let html=data.agents.map(a=>session(a,rows.filter(t=>t.session===a.session),now)).join('');
+  const orphans=rows.filter(t=>!live.has(t.session)), k='s:inactive';
+  if(orphans.length)html+=`<details class="card sess" data-k="${k}" ${isOpen(k,orphans.some(t=>t.status==='rodando'))?'open':''}><summary><span class="desc">${T('Inactive sessions','Sessões inativas')}</span></summary>${groups('inactive',[],orphans,now)}</details>`;
+  document.getElementById('sessions').innerHTML=html||'<p class="mut">'+T('No session active in the last 24 h.','Nenhuma sessão ativa nas últimas 24 h.')+'</p>';
+}
+document.getElementById('all').onchange=tick;tick();setInterval(tick,3000);
+</script></body></html>

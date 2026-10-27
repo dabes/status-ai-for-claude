@@ -7,7 +7,6 @@
   "cmd.openBrowser": "AI Status: Abrir no navegador",
   "cmd.reloadUsage": "AI Usage: Atualizar",
   "cmd.openUsage": "AI Usage: Abrir gráficos",
-  "cfg.python": "Executável do Python 3 que roda o servidor do painel. Vazio: \"python\" no Windows, \"python3\" nos outros.",
   "cfg.port": "Porta local do servidor do painel (só 127.0.0.1).",
   "cfg.days": "Quantos dias de sessões do Claude Code procurar por tarefas em segundo plano.",
   "cfg.usageDays": "Quantos dias de histórico do Claude Code a aba AI Usage soma (tokens e custo)."

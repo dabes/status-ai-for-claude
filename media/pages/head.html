@@ -1,0 +1,8 @@
+<script>const LANG=(()=>{let l='';try{l=localStorage.getItem('aiStatusLang')||''}catch(e){}
+  return l||new URLSearchParams(location.search).get('lang')||navigator.language||''})();
+const PT=/^pt/i.test(LANG);const T=(en,pt)=>PT?pt:en;const LOC=PT?'pt-BR':'en-US';   // datas e horas no idioma da página
+const S=s=>(PT?{completed:'concluída',failed:'falhou',killed:'encerrada',stopped:'parada'}
+  :{rodando:'running','sem notícia':'no news',trabalhando:'working','aguardando você':'waiting for you','esperando ferramenta':'waiting on a tool',
+    parado:'idle',entrada:'input','saída':'output','gravação de cache':'cache write','leitura de cache':'cache read'})[s]||s;
+addEventListener('DOMContentLoaded',()=>{if(!PT)return;document.documentElement.lang='pt-BR';
+  for(const e of document.querySelectorAll('[data-pt]'))e.textContent=e.dataset.pt})</script><script>if(window!==top)document.documentElement.classList.add('framed')</script><style>.framed h1{display:none}</style>

@@ -37,7 +37,7 @@
   "resets in {0}": "reinicia em {0}",
   "running": "rodando",
   "stopped": "parada",
-  "the panel server did not answer on port {0}. Check that Python 3 is installed (setting aiStatus.python) and the port is free (aiStatus.port).": "o servidor do painel não respondeu na porta {0}. Verifique se o Python 3 está instalado (configuração aiStatus.python) e se a porta está livre (aiStatus.port).",
+  "the panel server did not answer on port {0}. Check that the port is free (setting aiStatus.port).": "o servidor do painel não respondeu na porta {0}. Verifique se a porta está livre (configuração aiStatus.port).",
   "today {0}": "hoje {0}",
   "waiting for you": "aguardando você",
   "waiting on a tool": "esperando ferramenta",

@@ -1,0 +1,44 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Usage</title><style>
+:root{--bg:#f6f6f4;--card:#fff;--fg:#1c1c1a;--mut:#6b6b66;--line:#e3e2dd;--acc:#2f5fb3}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--fg:#ecebe6;--mut:#9a9993;--line:#33322f;--acc:#8ab4ff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,Segoe UI,sans-serif;padding:14px 20px 24px}
+h1{font-size:18px;margin:0}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px;font-weight:600}
+.mut{color:var(--mut)}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:12px 0}
+.kpi b{display:block;font-size:22px;font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;font-size:13px;margin:0 0 8px}.row span{overflow-wrap:anywhere}
+.row .bar{grid-column:1/-1;height:6px;background:var(--line);border-radius:3px;overflow:hidden}.row .bar i{display:block;height:100%;background:var(--acc)}
+svg text{fill:var(--mut);font-size:10px}svg rect{fill:var(--acc)}svg rect:hover{opacity:.7}
+</style></head><body><h1>AI Usage</h1><div class="mut" id="sub" data-pt="carregando…">loading…</div>
+<div class="kpis" id="kpis"></div><div class="card"><h2 data-pt="Por dia">Per day</h2><div id="chart"></div></div>
+<div class="grid"><div class="card"><h2 data-pt="Projetos">Projects</h2><div id="projects"></div></div><div class="card"><h2 data-pt="Modelos">Models</h2><div id="models"></div></div>
+<div class="card"><h2 data-pt="Tipos de token">Token types</h2><div id="kinds"></div></div><div class="card"><h2 data-pt="Ferramentas (chamadas)">Tools (calls)</h2><div id="tools"></div></div></div>
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money=c=>'$'+c.toFixed(2);
+const tok=n=>n>=1e9?(n/1e9).toFixed(2)+' B':n>=1e6?(n/1e6).toFixed(1)+' M':n>=1e3?(n/1e3).toFixed(0)+' k':String(Math.round(n));
+function bars(rows,val,label){const max=Math.max(...rows.map(val),1e-9);
+  return rows.map(r=>`<div class="row"><span>${esc(r.name)}</span><span class="mut">${label(r)}</span><div class="bar"><i style="width:${100*val(r)/max}%"></i></div></div>`).join('')||'<p class="mut">'+T('Nothing in the period.','Nada no período.')+'</p>'}
+function chart(days,val,label){const H=140,bw=18,W=days.length*bw,max=Math.max(...days.map(val),1e-9),step=Math.ceil(days.length/12);
+  return `<svg viewBox="0 0 ${W} ${H+16}" width="100%" role="img" aria-label="Uso por dia">`+days.map((d,i)=>{const h=Math.round(H*val(d)/max);
+    return `<rect x="${i*bw+2}" y="${H-h}" width="${bw-4}" height="${h}" rx="2"><title>${d.name}: ${label(d)}</title></rect>`
+      +(i%step===0?`<text x="${i*bw+bw/2}" y="${H+12}" text-anchor="middle">${d.name.slice(8)}/${d.name.slice(5,7)}</text>`:'')}).join('')+'</svg>'}
+async function tick(){
+  let u;try{u=await (await fetch('api/usage')).json()}catch(e){$('sub').textContent=T('server stopped','servidor parado');return}
+  if(!u.days){$('sub').textContent=T('calculating (reading the Claude Code histories)…','calculando (lendo os históricos do Claude Code)…');return}
+  const p=u.priced,val=p?r=>r.cost:r=>r.tokens,label=r=>(p?money(r.cost)+' · ':'')+tok(r.tokens)+' tokens';
+  $('sub').textContent=T(`Last ${u.period} days · `,`Últimos ${u.period} dias · `)+(p?T('cost at API prices (LiteLLM table), not what the plan charges','custo a preço de API (tabela LiteLLM), não o que o plano cobra'):T('no price table (offline): tokens only','sem tabela de preços (offline): só tokens'))
+    +(u.unpriced.length?T(' · no price: ',' · sem preço: ')+u.unpriced.join(', '):'')+T(' · updated ',' · atualizado ')+new Date(u.updated*1000).toLocaleTimeString(LOC);
+  $('kpis').innerHTML=[['Total',u.total],[T('Today','Hoje'),u.today],[T('Daily average','Média por dia'),{cost:u.total.cost/u.period,tokens:u.total.tokens/u.period}]]
+    .map(([t,r])=>`<div class="card kpi"><span class="mut">${t}</span><b>${p?money(r.cost):tok(r.tokens)}</b><span class="mut">${tok(r.tokens)} tokens</span></div>`).join('');
+  $('chart').innerHTML=chart(u.days,val,label);
+  $('projects').innerHTML=bars(u.projects,val,label);
+  $('models').innerHTML=bars(u.models,val,label);
+  $('kinds').innerHTML=bars(u.kinds.map(k=>({...k,name:S(k.name)})),val,label);
+  $('tools').innerHTML=bars(u.tools,r=>r.count,r=>r.count+'');
+}
+tick();setInterval(tick,30000);
+</script></body></html>
