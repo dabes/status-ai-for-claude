@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+
+- **Plan usage forecast.** At the pace of the last hour (6 hours for the week), the panel and the page show when you will reach 100% if that happens before the reset: *100% at 15:40 at this pace*. The panel asks Claude Code for the limits every 2 minutes instead of 5 (no cost) to have the readings for it.
+- **Notifications.** VS Code notifies when a session stops and waits for you, when a background command or subagent ends, and when plan usage passes 80% / 95% or is on pace to reach 100% within the hour. With several windows open, each notification shows once. Settings `aiStatus.notify.waiting`, `aiStatus.notify.tasks` and `aiStatus.notify.limit` turn them off.
+
 ## 0.7.0
 
 - **No Python needed.** The panel server is now written in JavaScript and runs on the Node.js that comes with VS Code, so there is nothing to install. The **AI Status: Python** setting is gone. The optional status line script is now `media/statusline.js`, run with `node`.

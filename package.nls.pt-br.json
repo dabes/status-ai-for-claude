@@ -9,5 +9,8 @@
   "cmd.openUsage": "AI Usage: Abrir gráficos",
   "cfg.port": "Porta local do servidor do painel (só 127.0.0.1).",
   "cfg.days": "Quantos dias de sessões do Claude Code procurar por tarefas em segundo plano.",
-  "cfg.usageDays": "Quantos dias de histórico do Claude Code a aba AI Usage soma (tokens e custo)."
+  "cfg.usageDays": "Quantos dias de histórico do Claude Code a aba AI Usage soma (tokens e custo).",
+  "cfg.notify.waiting": "Avisar quando uma sessão do Claude Code para e fica esperando você.",
+  "cfg.notify.tasks": "Avisar quando um comando em segundo plano ou um subagente termina (concluído, com falha, encerrado ou parado).",
+  "cfg.notify.limit": "Avisar quando o uso do plano passa de 80% e de 95%, e quando o ritmo atual chega a 100% dentro de uma hora."
 }

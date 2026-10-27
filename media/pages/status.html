@@ -25,7 +25,7 @@ pre{white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:var(--mut)}de
 .meter{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
 .meter .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
 .meter b{font-size:20px;font-variant-numeric:tabular-nums}.meter .bar{height:10px}
-.hi .bar i{background:var(--warn)}.max .bar i{background:var(--fail)}.stale{font-size:12px;color:var(--warn);padding:0 20px 10px}
+.hi .bar i{background:var(--warn)}.max .bar i{background:var(--fail)}.pace{color:var(--fail);font-weight:600}.stale{font-size:12px;color:var(--warn);padding:0 20px 10px}
 </style></head><body><header><h1>AI Status</h1><span class="mut" id="sum"></span>
 <label class="mut"><input type="checkbox" id="all"> <span data-pt="mostrar terminadas">show finished</span></label></header>
 <h2 style="padding:0 20px" data-pt="Uso do plano">Plan usage</h2>
@@ -77,9 +77,12 @@ function until(t,now){if(!t)return '';const s=t-now;if(s<=0)return T('resetting'
   return T('resets ','reinicia ')+(s<86400?T('in ','em ')+ago(s)+' ('+hm+')':d.toLocaleDateString(LOC, {weekday:'short',day:'2-digit'})+' '+hm)}
 function meter(title,w,now,err){if(w&&w.resets_at&&w.resets_at<now)w=null;   // janela já reiniciou: o número é de antes
   if(!w)return `<div class="meter"><div class="row"><span>${title}</span><span class="mut">${T('no data','sem dado')}</span></div>${err?`<div class="log mut">${esc(err)}</div>`:''}</div>`;
-  const cls=w.pct>=90?'max':w.pct>=70?'hi':'';
+  const f=w.forecast, cls=w.pct>=90||(f&&f.hits_at)?'max':w.pct>=70?'hi':'';   // previsão do servidor no ritmo recente
+  const hm=t=>new Date(t*1000).toLocaleTimeString(LOC,{hour:'2-digit',minute:'2-digit'});
+  const pace=f&&f.hits_at?`<div class="log pace">${T('100% at '+hm(f.hits_at)+' at this pace','100% às '+hm(f.hits_at)+' neste ritmo')}</div>`
+    :f?`<div class="log mut">${T('pace','ritmo')} ${f.per_hour.toFixed(1)} ${T('points/h','pontos/h')}</div>`:'';
   return `<div class="meter ${cls}"><div class="row"><span>${title}</span><b>${w.pct.toFixed(0)}%</b></div>
-  <div class="bar"><i style="width:${Math.min(100,w.pct)}%"></i></div><div class="log mut">${until(w.resets_at,now)}</div></div>`}
+  <div class="bar"><i style="width:${Math.min(100,w.pct)}%"></i></div><div class="log mut">${until(w.resets_at,now)}</div>${pace}</div>`}
 function usage(u,now,err){u=u||{};
   document.getElementById('usage').innerHTML=meter(T('Session (5 h)','Sessão (5 h)'),u.five_hour,now,err)+meter(T('Week (7 d)','Semana (7 d)'),u.seven_day,now,err);
   const age=u.updated?now-u.updated:null;

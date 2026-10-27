@@ -2,7 +2,7 @@
   "name": "status-ai-for-claude",
   "displayName": "Status AI for Claude",
   "description": "See how much of your Claude Code 5-hour and weekly limits is left, and what every session, command and subagent is running, with progress. Plus tokens and cost per day, project and model. Unofficial.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "xpree",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -115,6 +115,21 @@
           "type": "number",
           "default": 30,
           "description": "%cfg.usageDays%"
+        },
+        "aiStatus.notify.waiting": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.notify.waiting%"
+        },
+        "aiStatus.notify.tasks": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.notify.tasks%"
+        },
+        "aiStatus.notify.limit": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.notify.limit%"
         }
       }
     },

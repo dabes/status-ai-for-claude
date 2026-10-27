@@ -164,7 +164,7 @@ function agentState(file) {
 
 // Limites do plano (5 h e 7 d), perguntados ao próprio Claude Code (o pedido get_usage, o mesmo do painel Usage da
 // extensão oficial): nenhum prompt vai ao modelo (custo 0) e quem lê a credencial é o Claude Code, não este script.
-const USAGE_EVERY = 300;   // s entre consultas ao Claude Code
+const USAGE_EVERY = 120;   // s entre consultas ao Claude Code (custo 0; a previsão precisa de leituras frequentes)
 let cliUsage = null, cliError = null;
 
 function which(name) {
@@ -255,7 +255,42 @@ function usage() {
       best = { source: "statusline", updated: d.updated, five_hour: windowOf(rl.five_hour), seven_day: windowOf(rl.seven_day) };
     }
   } catch {}
-  return best;
+  if (!best) return best;
+  return { ...best, five_hour: forecast("five_hour", best.five_hour, best.updated), seven_day: forecast("seven_day", best.seven_day, best.updated) };
+}
+
+// Previsão: no ritmo da última hora (5 h) ou das últimas 6 h (semana), quando o uso chega a 100%. Guarda as leituras
+// de cada janela desde que ela reiniciou (muda o resets_at); null se ainda não há ritmo (menos de 10 min, ou parado).
+// ponytail: histórico só em memória; reiniciar o servidor zera a previsão até juntar 10 min de leituras de novo.
+const PACE = { five_hour: 3600, seven_day: 6 * 3600 };
+const history = { five_hour: [], seven_day: [] };
+function forecast(key, w, updated) {
+  if (!w) return w;
+  const h = history[key];
+  if (h.length && Math.abs((h[h.length - 1].resets_at || 0) - (w.resets_at || 0)) > 120) h.length = 0;   // a janela reiniciou
+  if (updated && (!h.length || updated > h[h.length - 1].t)) h.push({ t: updated, pct: w.pct, resets_at: w.resets_at });
+  while (h.length > 1 && h[0].t < updated - PACE[key]) h.shift();
+  return { ...w, forecast: pace(h, w) };
+}
+
+function pace(h, w) {
+  if (h.length < 2) return null;
+  const a = h[0], b = h[h.length - 1];
+  if (b.t - a.t < 600) return null;
+  const perHour = ((b.pct - a.pct) / (b.t - a.t)) * 3600;
+  if (perHour <= 0) return { per_hour: 0, hits_at: null };
+  const hits = b.t + ((100 - b.pct) / perHour) * 3600;
+  return { per_hour: perHour, hits_at: w.resets_at && hits >= w.resets_at ? null : hits };   // null: não chega antes de reiniciar
+}
+
+// Avisos: cada janela do VS Code pergunta antes de mostrar; só a primeira a pedir uma chave mostra (sem repetir o
+// mesmo aviso em todas as janelas abertas).
+const claimed = new Set();
+function claim(key) {
+  if (claimed.size > 5000) claimed.clear();
+  if (!key || claimed.has(key)) return false;
+  claimed.add(key);
+  return true;
 }
 
 // Uso em tokens e custo: todas as respostas do modelo nos históricos (sessões e subagentes), contadas uma vez só
@@ -656,6 +691,10 @@ function serve(port, days, usageDays) {
     let body, kind = "text/html; charset=utf-8";
     try {
       if (req.url.startsWith("/api/usage")) { body = JSON.stringify(report); kind = "application/json"; }
+      else if (req.url.startsWith("/api/claim")) {
+        body = JSON.stringify({ first: claim(new URL(req.url, "http://x").searchParams.get("key")) });
+        kind = "application/json";
+      }
       else if (req.url.startsWith("/api")) {
         const rows = snapshot(days);
         body = JSON.stringify({ tasks: rows, agents: agents(rows), usage: usage(), usage_error: cliError, now: now(), boot: BOOT,
@@ -743,6 +782,15 @@ function selftest() {
     cache_creation_input_token_cost_above_1hr: 4, cache_read_input_token_cost: 0.5 } };
   assert.deepStrictEqual(costs("claude-x-20260101", false, buckets.get(key)), [10, 200, 600 * 3 + 400 * 4, 5000]);
   prices = {};
+  // Previsão: 40% -> 50% em 30 min = 20%/h; de 50% faltam 50 pontos = 2,5 h, antes do reinício em 4 h.
+  const T0 = 1_800_000_000, R = T0 + 4 * 3600;
+  assert.strictEqual(forecast("five_hour", { pct: 40, resets_at: R }, T0).forecast, null);   // uma leitura só: sem ritmo
+  const f = forecast("five_hour", { pct: 50, resets_at: R }, T0 + 1800).forecast;
+  assert.ok(Math.abs(f.per_hour - 20) < 1e-9 && f.hits_at === T0 + 1800 + 2.5 * 3600, JSON.stringify(f));
+  assert.strictEqual(forecast("five_hour", { pct: 51, resets_at: T0 + 1900 + 600 }, T0 + 1900).forecast, null);   // reiniciou: recomeça
+  forecast("seven_day", { pct: 10, resets_at: T0 + 3600 }, T0);
+  assert.strictEqual(forecast("seven_day", { pct: 11, resets_at: T0 + 3600 }, T0 + 1200).forecast.hits_at, null);   // não chega antes de reiniciar
+  assert.ok(claim("a") && !claim("a") && claim("b"));   // o aviso sai em uma janela só
   const w = cliWindow({ utilization: 77, resets_at: "2026-10-19T13:20:00.052350+00:00" });
   assert.ok(w.pct === 77 && Math.abs(w.resets_at - 1792416000.05235) < 1, JSON.stringify(w));
   console.log("BG_DASHBOARD_OK");

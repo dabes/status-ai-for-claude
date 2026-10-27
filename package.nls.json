@@ -9,5 +9,8 @@
   "cmd.openUsage": "AI Usage: Open Charts",
   "cfg.port": "Local port of the panel server (127.0.0.1 only).",
   "cfg.days": "How many days of Claude Code sessions to scan for background tasks.",
-  "cfg.usageDays": "How many days of Claude Code history the AI Usage tab sums (tokens and cost)."
+  "cfg.usageDays": "How many days of Claude Code history the AI Usage tab sums (tokens and cost).",
+  "cfg.notify.waiting": "Notify when a Claude Code session stops and waits for you.",
+  "cfg.notify.tasks": "Notify when a background command or subagent ends (completed, failed, killed or stopped).",
+  "cfg.notify.limit": "Notify when plan usage passes 80% and 95%, and when the current pace reaches 100% within the hour."
 }

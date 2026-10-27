@@ -44,5 +44,14 @@
   "working": "trabalhando",
   "{0} ago": "há {0}",
   "{0} calls": "{0} chamadas",
-  "{0} running": "{0} rodando"
+  "{0} running": "{0} rodando",
+  "100% at {0} at this pace": "100% às {0} neste ritmo",
+  "Pace: {0} points per hour": "Ritmo: {0} pontos por hora",
+  "{0} is waiting for you": "{0} está esperando você",
+  "Task {0} ({1}): {2}": "Tarefa {0} ({1}): {2}",
+  "5-hour limit": "limite de 5 horas",
+  "weekly limit": "limite semanal",
+  "{0}: {1}% used": "{0}: {1}% usado",
+  "At this pace you will reach the {0} at {1}": "Neste ritmo você chega ao {0} às {1}",
+  "Open panel": "Abrir painel"
 }

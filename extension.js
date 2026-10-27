@@ -113,13 +113,18 @@ function item(label, opts = {}) {
   return it;
 }
 
+const clock = (t) => new Date(t * 1000).toLocaleTimeString(vscode.env.language, { hour: "2-digit", minute: "2-digit" });
+
 // Every item gets a stable id: without one VS Code keys it by its label, which changes on each refresh ("43%"), and it
 // sometimes leaves the old row painted under the new one.
 function meter(id, title, w, now, err) {
   if (!w) return item(title, { id, description: err ? L("no data: {0}", err) : L("no data"), tooltip: err, icon: "dashboard" });
   const reset = w.resets_at ? L("resets in {0}", ago(w.resets_at - now)) : "";
-  const color = w.pct >= 90 ? "errorForeground" : w.pct >= 70 ? "editorWarning.foreground" : undefined;
-  return item(`${title}  ${w.pct.toFixed(0)}%`, { id, description: `${bar(w.pct)}  ${reset}`, icon: "dashboard", color });
+  const f = w.forecast;   // the server's projection at the recent pace; hits_at null: won't reach 100% before the reset
+  const pace = f && f.hits_at ? ` · ${L("100% at {0} at this pace", clock(f.hits_at))}` : "";
+  const color = w.pct >= 90 || (f && f.hits_at) ? "errorForeground" : w.pct >= 70 ? "editorWarning.foreground" : undefined;
+  return item(`${title}  ${w.pct.toFixed(0)}%`, { id, description: `${bar(w.pct)}  ${reset}${pace}`, icon: "dashboard", color,
+    tooltip: f ? L("Pace: {0} points per hour", f.per_hour.toFixed(1)) : undefined });
 }
 
 const KEEP_DONE = 300;   // s that a finished task stays listed
@@ -225,6 +230,7 @@ class Provider {
   async refresh() {
     try {
       const port = await ensureServer(this.context);
+      this.port = port;
       this.data = JSON.parse(await get(port, this.urlPath));
       this.roots = this.build(this.data);
     } catch (e) {
@@ -233,6 +239,56 @@ class Provider {
     }
     this.changed.fire();
   }
+}
+
+// VS Code notifications on changes between two refreshes: a session that stops to wait for you, a background task
+// that ends, the plan usage crossing 80% / 95% or heading for 100% within the hour. Every open window runs this, so
+// each notification is claimed on the shared server first and only the first window to claim it shows it.
+function notifier() {
+  let prev = null;
+  return (d, port) => {
+    const cfg = vscode.workspace.getConfiguration("aiStatus.notify");
+    const cur = { agents: new Map(d.agents.map((a) => [a.session, a.status])), tasks: new Map(d.tasks.map((t) => [t.id, t.status])) };
+    const before = prev;
+    prev = cur;
+    if (!before) return;   // first refresh: nothing changed yet
+    const notes = [];
+    if (cfg.get("waiting")) {
+      for (const a of d.agents) {
+        const was = before.agents.get(a.session);
+        if (a.status === "aguardando você" && (was === "trabalhando" || was === "esperando ferramenta")) {
+          notes.push({ key: `wait:${a.session}:${a.last}`, msg: L("{0} is waiting for you", a.project) + (a.action ? `: ${a.action}` : "") });
+        }
+      }
+    }
+    if (cfg.get("tasks")) {
+      for (const t of d.tasks) {
+        if (before.tasks.get(t.id) === "rodando" && !["rodando", "sem notícia"].includes(t.status)) {
+          notes.push({ key: `task:${t.id}:${t.status}`, warn: t.status !== "completed",
+            msg: L("Task {0} ({1}): {2}", shownStatus(t.status), t.project, t.description || t.command) });
+        }
+      }
+    }
+    if (cfg.get("limit")) {
+      for (const [k, label] of [["five_hour", L("5-hour limit")], ["seven_day", L("weekly limit")]]) {
+        const w = windowOf((d.usage || {})[k], d.now);
+        if (!w) continue;
+        const period = Math.round(w.resets_at || 0), level = w.pct >= 95 ? 95 : w.pct >= 80 ? 80 : 0;
+        if (level) notes.push({ key: `limit:${k}:${period}:${level}`, warn: true, msg: L("{0}: {1}% used", label, w.pct.toFixed(0)) });
+        const f = w.forecast;
+        if (f && f.hits_at && f.hits_at - d.now < 3600) {
+          notes.push({ key: `pace:${k}:${period}`, warn: true, msg: L("At this pace you will reach the {0} at {1}", label, clock(f.hits_at)) });
+        }
+      }
+    }
+    for (const n of notes) {
+      get(port, `/api/claim?key=${encodeURIComponent(n.key)}`).then((b) => {
+        if (!JSON.parse(b).first) return;
+        const show = n.warn ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+        show(n.msg, L("Open panel")).then((c) => c && vscode.commands.executeCommand("aiStatus.view.focus"));
+      }, () => {});
+    }
+  };
 }
 
 function activate(context) {
@@ -246,12 +302,14 @@ function activate(context) {
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   status.command = "aiStatus.view.focus";
   status.tooltip = L("AI Status: Claude Code plan usage (5 h · 7 d)");
+  const notify = notifier();
   let at = 0;
   const tick = async (force) => {
     // ponytail: polls the server every 3 s while the tree is visible, every 30 s (status bar only) otherwise.
     if (!force && !view.visible && Date.now() - at < 30000) return;
     at = Date.now();
     await provider.refresh();
+    if (provider.data && provider.port) notify(provider.data, provider.port);
     status.text = `$(pulse) ${usageText(provider.data) || "AI Status"}`;
     status.show();
   };
@@ -277,4 +335,4 @@ function deactivate() {
   if (server && server.exitCode === null) server.kill();
 }
 
-module.exports = { activate, deactivate, tree, usageTree, usageText };
+module.exports = { activate, deactivate, tree, usageTree, usageText, notifier };

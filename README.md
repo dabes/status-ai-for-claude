@@ -56,7 +56,7 @@ The cost is the tokens times the API prices in [LiteLLM's price table](https://g
 
 ## Plan usage (5 h / 7 d)
 
-Every 5 minutes the panel asks Claude Code for your plan's limits, using the same `get_usage` request that feeds Claude Code's own **Usage** view: it starts `claude` with no prompt, sends that one request and closes it. Nothing goes to the model (cost 0, no tokens), and Claude Code handles the login itself; the panel never reads your credentials. It needs the `claude` command installed and logged in.
+Every 2 minutes the panel asks Claude Code for your plan's limits, using the same `get_usage` request that feeds Claude Code's own **Usage** view: it starts `claude` with no prompt, sends that one request and closes it. Nothing goes to the model (cost 0, no tokens), and Claude Code handles the login itself; the panel never reads your credentials. It needs the `claude` command installed and logged in.
 
 As a fallback (or for updates after every response in the terminal), `media/statusline.js` can be Claude Code's status line. It saves the numbers it receives and prints `5h 6% · 7d 27%`:
 
@@ -65,6 +65,18 @@ As a fallback (or for updates after every response in the terminal), `media/stat
 ```
 
 The newest of the two wins. A window that has already reset shows no number until fresh data arrives.
+
+**Forecast.** From the readings of the last hour (the last 6 hours for the week), the panel works out your pace and, when it reaches 100% before the window resets, shows when: *100% at 15:40 at this pace*. It needs about 10 minutes of readings after the panel server starts. When your pace won't reach 100% before the reset, the tooltip shows only the pace, in points per hour.
+
+## Notifications
+
+VS Code notifications, each with an **Open panel** button:
+
+- a Claude Code session stops and waits for you;
+- a background command or subagent ends (a warning when it failed, was killed or stopped);
+- plan usage passes 80% and 95%, and the current pace reaches 100% within the hour.
+
+With several VS Code windows open, each notification shows in one window only. Turn each kind off in the settings below.
 
 ## Requirements
 
@@ -92,3 +104,6 @@ It serves the page on `127.0.0.1` only. It makes two kinds of network request: a
 | `aiStatus.port` | `8765` | Local port of the panel server |
 | `aiStatus.days` | `3` | Days of sessions to scan for tasks |
 | `aiStatus.usageDays` | `30` | Days of history the AI Usage tab sums |
+| `aiStatus.notify.waiting` | `true` | Notify when a session waits for you |
+| `aiStatus.notify.tasks` | `true` | Notify when a background command or subagent ends |
+| `aiStatus.notify.limit` | `true` | Notify at 80% and 95% of a limit, and when the pace reaches 100% within the hour |
