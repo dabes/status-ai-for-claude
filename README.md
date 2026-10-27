@@ -14,6 +14,14 @@ A finished task stays listed for 5 minutes after it ends, then leaves the list. 
 
 **Open in Browser** opens the same structure as a page, with two tabs, **AI Status** and **AI Usage**. The page adds the full command, the last lines of its log and a **show finished** switch that keeps every finished task listed.
 
+| Panel: AI Status | Panel: AI Usage |
+|---|---|
+| ![Plan usage and sessions in the AI Status panel](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/panel-status.png) | ![Cost and tokens per day in the AI Usage panel](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/panel-usage.png) |
+
+![Browser page, AI Status tab: plan usage meters and sessions](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/page-status.png)
+
+![Browser page, AI Usage tab: totals and cost per day](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/page-usage.png)
+
 ## Languages
 
 English and Portuguese (Brazil). Any other language falls back to English.
