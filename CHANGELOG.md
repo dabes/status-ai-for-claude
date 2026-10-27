@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3
+
+- The browser page opens in VS Code's display language and has a language selector (Auto, English, Português) next to the tabs. The choice is remembered for both tabs.
+- The README shows screenshots of the panel and the page.
+
 ## 0.6.2
 
 - Subagents show up again under **Agents**. Claude Code now launches them asynchronously by default, and the panel was skipping those calls, so almost none were listed.

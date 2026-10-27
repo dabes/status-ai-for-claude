@@ -2,7 +2,7 @@
   "name": "status-ai-for-claude",
   "displayName": "Status AI for Claude",
   "description": "Unofficial. Plan usage (5-hour and weekly limits), what each Claude Code session is running (foreground and background, with progress) and AI Usage: tokens and cost per day, project, model and tool.",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "publisher": "xpree",
   "license": "MIT",
   "icon": "media/icon.png",

@@ -29,7 +29,7 @@ English and Portuguese (Brazil). Any other language falls back to English.
 **Choosing the language**
 
 - **Panel, commands and settings** follow VS Code's display language. To change it, run **Configure Display Language** from the Command Palette, pick a language and restart VS Code. Portuguese needs the *Portuguese (Brazil) Language Pack*, which VS Code offers to install. To force a language without changing VS Code's, start it with `code --locale=pt-br` or `code --locale=en`.
-- **Browser page** (**Open in Browser** and **Open Charts**) follows the browser's preferred language. It is in Portuguese when that language starts with `pt`, otherwise in English. In Chrome or Edge, change it in **Settings → Languages** and move the language you want to the top.
+- **Browser page** (**Open in Browser** and **Open Charts**) opens in VS Code's display language. To change it, use the language selector at the right of the tabs (**Auto**, **English**, **Português**). The browser remembers the choice for both tabs. On **Auto**, the page follows the `?lang=` in its address (the extension adds VS Code's language there), or, without it, the browser's preferred language. It is in Portuguese when that language starts with `pt`, otherwise in English.
 
 **Adding a language**
 

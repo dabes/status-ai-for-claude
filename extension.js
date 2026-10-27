@@ -239,7 +239,8 @@ function activate(context) {
   const view = vscode.window.createTreeView("aiStatus.view", { treeDataProvider: provider });
   const usageProvider = new Provider(context, "/api/usage", usageTree);
   const usageView = vscode.window.createTreeView("aiStatus.usage", { treeDataProvider: usageProvider });
-  const page = (p) => `http://localhost:${vscode.workspace.getConfiguration("aiStatus").get("port")}/${p}`;
+  // ?lang=: the page follows VS Code's display language unless the viewer picks one on the page.
+  const page = (p) => `http://localhost:${vscode.workspace.getConfiguration("aiStatus").get("port")}/?lang=${encodeURIComponent(vscode.env.language)}${p}`;
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   status.command = "aiStatus.view.focus";
   status.tooltip = L("AI Status: Claude Code plan usage (5 h · 7 d)");

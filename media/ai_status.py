@@ -716,9 +716,12 @@ tick();setInterval(tick,30000);
 # "/": as duas páginas acima em abas. Iframes porque cada uma tem o próprio CSS e JS (nomes repetidos: .row, tick, $...);
 # dentro da aba o título some (FRAMED), a aba já diz o que é. #usage na URL abre direto na aba de uso.
 FRAMED = "<script>if(window!==top)document.documentElement.classList.add('framed')</script><style>.framed h1{display:none}</style>"
-# Idioma do navegador: português se começa com "pt", senão inglês. T(en, pt) no JS; data-pt no HTML estático;
+# Idioma: o escolhido no seletor da página (localStorage), senão ?lang= (a extensão passa o do VS Code), senão o do
+# navegador; português se começa com "pt", senão inglês. T(en, pt) no JS; data-pt no HTML estático;
 # S() traduz os status e tipos de token que vêm do servidor em português (também usados como classes CSS).
-I18N = """<script>const PT=/^pt/i.test(navigator.language||'');const T=(en,pt)=>PT?pt:en;
+I18N = """<script>const LANG=(()=>{let l='';try{l=localStorage.getItem('aiStatusLang')||''}catch(e){}
+  return l||new URLSearchParams(location.search).get('lang')||navigator.language||''})();
+const PT=/^pt/i.test(LANG);const T=(en,pt)=>PT?pt:en;
 const S=s=>(PT?{completed:'concluída',failed:'falhou',killed:'encerrada',stopped:'parada'}
   :{rodando:'running','sem notícia':'no news',trabalhando:'working','aguardando você':'waiting for you','esperando ferramenta':'waiting on a tool',
     parado:'idle',entrada:'input','saída':'output','gravação de cache':'cache write','leitura de cache':'cache read'})[s]||s;
@@ -734,10 +737,16 @@ html,body{height:100%;margin:0}body{display:flex;flex-direction:column;backgroun
 nav{display:flex;gap:4px;padding:10px 20px 0;border-bottom:1px solid var(--line)}
 nav a{padding:6px 14px;color:var(--mut);text-decoration:none;font-weight:600;border-bottom:2px solid transparent;margin-bottom:-1px}
 nav a[aria-selected=true]{color:var(--fg);border-color:var(--acc)}
+nav select{margin:0 0 6px auto;background:var(--bg);color:var(--mut);border:1px solid var(--line);border-radius:6px;font:inherit;padding:2px 6px}
 iframe{flex:1;border:0;width:100%}iframe[hidden]{display:none}
-</style></head><body><nav role="tablist"><a role="tab" href="#status">AI Status</a><a role="tab" href="#usage">AI Usage</a></nav>
-<iframe id="status" src="status" title="AI Status"></iframe><iframe id="usage" src="usage" title="AI Usage" hidden></iframe>
+</style></head><body><nav role="tablist"><a role="tab" href="#status">AI Status</a><a role="tab" href="#usage">AI Usage</a>
+<select id="lang" aria-label="Language / Idioma"><option value="">Auto</option><option value="en">English</option><option value="pt-BR">Português</option></select></nav>
+<iframe id="status" title="AI Status"></iframe><iframe id="usage" title="AI Usage" hidden></iframe>
 <script>
+// As abas recebem o ?lang= da URL; o seletor grava a escolha (vale para as duas, mesma origem) e recarrega.
+for(const f of document.querySelectorAll('iframe'))f.src=f.id+location.search;
+const sel=document.getElementById('lang');try{sel.value=localStorage.getItem('aiStatusLang')||''}catch(e){}
+sel.onchange=()=>{try{sel.value?localStorage.setItem('aiStatusLang',sel.value):localStorage.removeItem('aiStatusLang')}catch(e){}location.reload()};
 function show(){const t=location.hash==='#usage'?'usage':'status';
   for(const f of document.querySelectorAll('iframe'))f.hidden=f.id!==t;
   for(const a of document.querySelectorAll('nav a'))a.setAttribute('aria-selected',a.hash==='#'+t)}
