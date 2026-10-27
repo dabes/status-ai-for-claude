@@ -57,7 +57,7 @@ def parse_session(path, state=None):
     for raw_line in data[:end].splitlines():
         line = raw_line.decode("utf-8", "replace")
         if "run_in_background" not in line and "task-id" not in line and "background with ID" not in line \
-                and "agentId" not in line and "agent-message" not in line and (title and cwd):
+                and "agentId" not in line and "agent-message" not in line and '"Agent"' not in line and (title and cwd):   # Agent assíncrono: a chamada não traz nenhuma das outras marcas
             continue
         try:
             d = json.loads(line)
@@ -166,10 +166,11 @@ def cli_usage_once():
     exe = shutil.which("claude") or str(pathlib.Path.home() / ".local" / "bin" / ("claude.exe" if os.name == "nt" else "claude"))
     args = [exe, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--no-session-persistence", "--setting-sources", ""]   # sem hooks, sem gravar sessão
-    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                         text=True, encoding="utf-8", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, encoding="utf-8", errors="replace", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     timer = threading.Timer(30, p.kill)
     timer.start()
+    other = []   # o que não é JSON (erros do claude): vira o motivo da falha
     try:
         p.stdin.write(json.dumps({"type": "control_request", "request_id": "ai-status",
                                   "request": {"subtype": "get_usage"}}) + "\n")
@@ -178,13 +179,17 @@ def cli_usage_once():
             try:
                 m = json.loads(line)
             except ValueError:
+                other.append(line.strip())
                 continue
             if m.get("type") == "control_response":
-                return (m.get("response") or {}).get("response") or {}
+                r = m.get("response") or {}
+                if r.get("subtype") == "error":
+                    raise RuntimeError(f"claude: {r.get('error')}")
+                return r.get("response") or {}
     finally:
         timer.cancel()
         p.kill()
-    return {}
+    raise RuntimeError(f"claude ({exe}) saiu sem responder" + (f": {' '.join(other)[-300:]}" if other else " (30 s)"))
 
 
 def cli_window(w):
@@ -196,15 +201,23 @@ def cli_window(w):
     return {"pct": float(w["utilization"]), "resets_at": reset}
 
 
+_cli_error = {}   # "e": por que a última consulta falhou; vai em /api como usage_error
+
+
 def cli_usage_loop():
     while True:
         try:
-            rl = cli_usage_once().get("rate_limits") or {}
-            if rl.get("five_hour") or rl.get("seven_day"):
-                _cli_usage.update(source="claude", updated=time.time(),
-                                  five_hour=cli_window(rl.get("five_hour")), seven_day=cli_window(rl.get("seven_day")))
-        except (OSError, ValueError):
-            pass   # Claude Code ausente ou deslogado: fica o último dado (ou o da linha de status)
+            r = cli_usage_once()
+            rl = r.get("rate_limits") or {}
+            if not (rl.get("five_hour") or rl.get("seven_day")):
+                raise RuntimeError(f"claude respondeu sem rate_limits (rate_limits_available={r.get('rate_limits_available')})")
+            _cli_usage.update(source="claude", updated=time.time(),
+                              five_hour=cli_window(rl.get("five_hour")), seven_day=cli_window(rl.get("seven_day")))
+            _cli_error.clear()
+        except Exception as e:   # qualquer falha: fica o último dado (ou o da linha de status) e tenta logo de novo
+            _cli_error["e"] = str(e) or type(e).__name__
+            time.sleep(60)
+            continue
         time.sleep(USAGE_EVERY)
 
 
@@ -473,6 +486,24 @@ def download_progress(command, cwd):
     return None
 
 
+def held_open(path):
+    """Windows: True se algum processo mantém o arquivo aberto (a tarefa de fundo escrevendo nele), False se ninguém.
+    None fora do Windows ou se não deu para saber."""
+    # ponytail: só Windows; no Linux/macOS daria para varrer /proc/*/fd ou usar lsof, se fizer falta.
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateFileW.restype = wintypes.HANDLE
+    k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    h = k.CreateFileW(str(path), 0x80000000, 0, None, 3, 0, None)   # GENERIC_READ sem compartilhar, OPEN_EXISTING
+    if h == wintypes.HANDLE(-1).value:
+        return True if ctypes.get_last_error() == 32 else None   # 32: ERROR_SHARING_VIOLATION, alguém tem aberto
+    k.CloseHandle(h)
+    return False
+
+
 def epoch(ts):
     """Timestamp ISO do histórico ("2026-10-20T12:00:00.123Z") em segundos; None se vazio ou inválido."""
     try:
@@ -494,7 +525,10 @@ def snapshot(days):
         session = path.stem
         for tid, t in tasks.items():
             out = TASKS / path.parent.name / session / "tasks" / f"{tid}.output"
+            if not out.exists():   # sessão retomada: a saída fica na pasta do id do processo que lançou a tarefa
+                out = next((TASKS / path.parent.name).glob(f"*/tasks/{tid}.output"), out)
             tail, size, age = tail_of(out)
+            out_age = age
             last = tail[-1][:200] if tail else ""
             # Log para onde o comando manda a saída (> arquivo, >> arquivo, tee arquivo): ali está o progresso.
             log, log_lines, log_age = "", [], None
@@ -508,6 +542,9 @@ def snapshot(days):
             end = re.match(r"\[(killed|exited with code (\d+))\]", last)
             if status == "rodando" and end:
                 status = "killed" if end.group(1) == "killed" else ("completed" if end.group(2) == "0" else "failed")
+            elif status == "rodando" and t["tool"] == "Bash" and out_age is not None and out_age > 30 and held_open(out) is False:
+                # Ninguém escreve mais na saída: o processo morreu sem o marcador de fim (o Claude Code que o lançou fechou).
+                status, ended = "stopped", now - out_age
                 ended = now - (age or 0)   # a última escrita na saída foi o fim
             elif status == "rodando" and (age if age is not None else now - mtime) > 6 * 3600:
                 status = "sem notícia"   # nada escrito há horas e nenhum aviso de fim
@@ -523,90 +560,114 @@ def snapshot(days):
     return running + rest
 
 
-PAGE = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI Status</title><style>
 :root{--bg:#f6f6f4;--card:#fff;--fg:#1c1c1a;--mut:#6b6b66;--line:#e3e2dd;--run:#1f7a4d;--done:#5b5b57;--fail:#b3261e;--warn:#9a6a00;--wait:#2f5fb3}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--fg:#ecebe6;--mut:#9a9993;--line:#33322f;--run:#4fbf87;--done:#a3a29c;--fail:#ff8a80;--warn:#e0b44a;--wait:#8ab4ff}}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,Segoe UI,sans-serif}
 header{padding:14px 20px;display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}h1{font-size:18px;margin:0}
 h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 10px;font-weight:600}
+h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:12px 0 2px;font-weight:600}
 .mut{color:var(--mut)}label{margin-left:auto}
-main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:0 20px 24px;align-items:start}
-@media (max-width:760px){main{grid-template-columns:1fr}}
-section{min-width:0}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 10px;min-width:0}
-.top{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}.st{font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+main{padding:0 20px 24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:0 0 10px;min-width:0}
+summary{cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}
+.sess>summary::before{content:'▸';color:var(--mut);margin-right:6px}.sess[open]>summary::before{content:'▾'}
+.top{display:flex;gap:8px 10px;align-items:baseline;flex-wrap:wrap}.st{font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
 .rodando,.trabalhando{color:var(--run)}.completed{color:var(--done)}.failed,.killed{color:var(--fail)}.stopped,.sem,.parado,.esperando{color:var(--warn)}.aguardando{color:var(--wait)}
-.desc{font-weight:600;overflow-wrap:anywhere}.agent{font-size:12px}code,pre{font:12px/1.4 ui-monospace,Consolas,monospace}
-pre{white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:var(--mut)}details summary{cursor:pointer;color:var(--mut);font-size:12px}
-.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:var(--run)}
-.pct{font-weight:600;font-variant-numeric:tabular-nums}.log{font-size:12px;margin-top:6px;overflow-wrap:anywhere}
-.last{margin-top:6px;padding:6px 8px;background:var(--bg);border-radius:6px;overflow-x:auto;white-space:pre}
+.desc{font-weight:600;overflow-wrap:anywhere}.small{font-size:12px}code,pre{font:12px/1.4 ui-monospace,Consolas,monospace}
+pre{white-space:pre-wrap;word-break:break-all;margin:6px 0 0;color:var(--mut)}details.more>summary{color:var(--mut);font-size:12px;margin-top:4px}
+.item{border-top:1px solid var(--line);padding:8px 0 8px 22px;position:relative}.item>.ico{position:absolute;left:2px;top:8px;width:16px;text-align:center}
+.fg>.ico{color:var(--run)}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:var(--run)}
+.pct{font-weight:600;font-variant-numeric:tabular-nums}.log{font-size:12px;margin-top:4px;overflow-wrap:anywhere}
+.last{margin-top:4px;padding:5px 8px;background:var(--bg);border-radius:6px;overflow-x:auto;white-space:pre}
 .now{margin-top:6px;padding:6px 8px;background:var(--bg);border-radius:6px;font-size:13px;overflow-wrap:anywhere}
 .usage{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:0 20px 14px}@media (max-width:760px){.usage{grid-template-columns:1fr}}
 .meter{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
 .meter .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap}
 .meter b{font-size:20px;font-variant-numeric:tabular-nums}.meter .bar{height:10px}
 .hi .bar i{background:var(--warn)}.max .bar i{background:var(--fail)}.stale{font-size:12px;color:var(--warn);padding:0 20px 10px}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.chip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;color:var(--mut)}
 </style></head><body><header><h1>AI Status</h1><span class="mut" id="sum"></span>
-<label class="mut"><input type="checkbox" id="all"> mostrar terminadas</label></header>
+<label class="mut"><input type="checkbox" id="all"> <span data-pt="mostrar terminadas">show finished</span></label></header>
+<h2 style="padding:0 20px" data-pt="Uso do plano">Plan usage</h2>
 <div class="usage" id="usage"></div><div class="stale" id="stale"></div>
-<main><section><h2>Tarefas</h2><div id="list"></div></section><section><h2>Agentes</h2><div id="agents"></div></section></main>
+<main><h2 id="sessTitle"></h2><div id="sessions"></div></main>
 <script>
+// Mesma estrutura da árvore da extensão: uso do plano; sessões, cada uma com Comandos e Agentes (primeiro plano e
+// segundo plano juntos); sessões inativas. Tarefa terminada some 5 min depois do fim (a não ser com "mostrar terminadas").
 const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const ago=s=>s==null?'':s<90?Math.round(s)+' s':s<5400?Math.round(s/60)+' min':(s/3600).toFixed(1)+' h';
-const NL=String.fromCharCode(10);
-function task(r,open){return `
-  <div class="card"><div class="top"><span class="st ${esc(r.status.split(' ')[0])}">${esc(r.status)}</span>
-  <span class="desc">${esc(r.description||r.tool)}</span><code class="mut">${esc(r.id)}</code></div>
-  <div class="agent mut">${esc(r.project)} · sessão <code>${esc(r.session.slice(0,8))}</code> · início ${esc((r.started||'').replace('T',' ').slice(0,19))} UTC${r.age!=null?' · escrito há '+ago(r.age):''}</div>
-  ${r.summary?`<div class="mut">${esc(r.summary)}</div>`:''}
-  ${r.progress?`<div class="bar"><i style="width:${Math.min(100,r.progress.pct)}%"></i></div>
-  <div class="log"><span class="pct">${r.progress.pct.toFixed(1)}%</span> <span class="mut">${esc(r.progress.text)}</span></div>`:''}
-  ${r.log_tail.length?`<div class="last"><code>${r.log_tail.map(esc).join(NL)}</code></div><div class="log mut">log: ${esc(r.log)}</div>`
-    :(r.last?`<div class="last"><code>${esc(r.last)}</code></div>`:'')}
-  <details data-id="${esc(r.id)}" ${open.has(r.id)?'open':''}><summary>comando (${esc(r.tool)})</summary><pre>${esc(r.command)}</pre></details></div>`}
-function agent(a){return `
-  <div class="card"><div class="top"><span class="st ${esc(a.status.split(' ')[0])}">${esc(a.status)}</span>
-  <span class="desc">${esc(a.project)}</span><code class="mut">${esc(a.session.slice(0,8))}</code>
-  <span class="mut">${esc(a.model)} · há ${ago(a.age)}</span></div>
-  <div class="agent mut">${esc(a.title)}</div>
+const agoT=s=>T(ago(s)+' ago','há '+ago(s));
+const NL=String.fromCharCode(10), KEEP_DONE=300;
+const opened=new Map();   // o que o usuário abriu ou fechou (chave -> aberto), mantido entre as atualizações
+document.addEventListener('click',e=>{const s=e.target.closest('summary'),d=s&&s.parentElement;if(d&&d.dataset.k)opened.set(d.dataset.k,!d.open)});
+const isOpen=(k,def)=>opened.has(k)?opened.get(k):def;
+function more(k,label,body){return `<details class="more" data-k="${esc(k)}" ${isOpen(k,false)?'open':''}><summary>${label}</summary>${body}</details>`}
+function task(r,now){const run=r.status==='rodando';
+  const line=run&&((r.progress&&r.progress.text)||r.log_tail.slice(-1)[0]||r.last);
+  const ico=run?'⟳':r.status==='completed'?'✓':r.status==='sem notícia'?'?':'✕';
+  return `<div class="item"><span class="ico st ${esc(r.status.split(' ')[0])}">${ico}</span>
+  <div class="top"><span class="desc">${esc(r.description||r.command)}</span><span class="st ${esc(r.status.split(' ')[0])}">${esc(S(r.status))}</span>
+  ${r.ended!=null?`<span class="mut small">${agoT(now-r.ended)}</span>`:''}</div>
+  ${r.summary?`<div class="mut small">${esc(r.summary)}</div>`:''}
+  ${run&&r.progress?`<div class="bar"><i style="width:${Math.min(100,r.progress.pct)}%"></i></div>`:''}
+  ${line?`<div class="last"><code>${run&&r.progress?`<span class="pct">${r.progress.pct.toFixed(1)}%</span> `:''}${esc(line.trim())}</code></div>`:''}
+  ${more('t:'+r.id,`${T('command','comando')} (${esc(r.tool)}) · <code>${esc(r.id)}</code>`,`<pre>${esc(r.command)}</pre>`
+    +(r.log_tail.length?`<div class="last"><code>${r.log_tail.map(esc).join(NL)}</code></div><div class="log mut">log: ${esc(r.log)}</div>`:'')
+    +`<div class="log mut">${T('started','início')} ${esc((r.started||'').replace('T',' ').slice(0,19))} UTC${r.age!=null?' · '+T('written '+ago(r.age)+' ago','escrito há '+ago(r.age)):''}</div>`)}</div>`}
+function fg(c,now,k){return `<div class="item fg"><span class="ico">▶</span>
+  <div class="top"><span class="desc">${esc(c.description||c.command||c.tool)}</span>
+  <span class="mut small">${esc(c.tool)} · ${T('foreground','primeiro plano')}${c.started?' · '+ago(now-Date.parse(c.started)/1000):''}</span></div>
+  ${c.command?more(k,T('command','comando'),`<pre>${esc(c.command)}</pre>`):''}</div>`}
+function groups(id,current,tasks,now){const agent=x=>x.tool==='Agent';
+  const group=(name,cur,list)=>cur.length+list.length?`<h3>${name}  (${cur.length+list.length})</h3>`
+    +cur.map((c,i)=>fg(c,now,`f:${id}:${name}:${i}`)).join('')+list.map(r=>task(r,now)).join(''):'';
+  return group(T('Commands','Comandos'),current.filter(c=>!agent(c)),tasks.filter(t=>!agent(t)))
+    +group(T('Agents','Agentes'),current.filter(agent),tasks.filter(agent))}
+function session(a,tasks,now){const cur=a.current||[], running=tasks.filter(t=>t.status==='rodando').length+cur.length, k='s:'+a.session;
+  return `<details class="card sess" data-k="${esc(k)}" ${isOpen(k,running>0)?'open':''}><summary><span class="top" style="display:inline-flex">
+  <span class="desc">${esc(a.project)}</span><span class="st ${esc(a.status.split(' ')[0])}">${esc(S(a.status))}</span>
+  ${running?`<span class="mut">(${running} ${T('running','rodando')})</span>`:''}
+  <span class="mut small">${esc(a.model)} · ${agoT(a.age)} · <code>${esc(a.session.slice(0,8))}</code></span></span></summary>
+  ${a.title?`<div class="mut small">${esc(a.title)}</div>`:''}
   ${a.action?`<div class="now">${a.kind==='tool'?'▶ ':'💬 '}${esc(a.action)}</div>`:''}
-  ${a.prompt?`<div class="log mut">último pedido: ${esc(a.prompt)}</div>`:''}
-  <div class="chips"><span class="chip">${a.running} tarefa(s) rodando</span>${a.subagents.map(s=>`<span class="chip">subagente: ${esc(s)}</span>`).join('')}</div></div>`}
-function until(t,now){if(!t)return '';const s=t-now;if(s<=0)return 'reiniciando';
+  ${a.prompt?`<div class="log mut">${T('last request','último pedido')}: ${esc(a.prompt)}</div>`:''}
+  ${groups(a.session,cur,tasks,now)}</details>`}
+function until(t,now){if(!t)return '';const s=t-now;if(s<=0)return T('resetting','reiniciando');
   const d=new Date(t*1000), hm=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-  return 'reinicia '+(s<86400?'em '+ago(s)+' ('+hm+')':d.toLocaleDateString([], {weekday:'short',day:'2-digit'})+' '+hm)}
-function meter(title,w,now){if(w&&w.resets_at&&w.resets_at<now)w=null;   // janela já reiniciou: o número é de antes
-  if(!w)return `<div class="meter"><div class="row"><span>${title}</span><span class="mut">sem dado</span></div></div>`;
+  return T('resets ','reinicia ')+(s<86400?T('in ','em ')+ago(s)+' ('+hm+')':d.toLocaleDateString([], {weekday:'short',day:'2-digit'})+' '+hm)}
+function meter(title,w,now,err){if(w&&w.resets_at&&w.resets_at<now)w=null;   // janela já reiniciou: o número é de antes
+  if(!w)return `<div class="meter"><div class="row"><span>${title}</span><span class="mut">${T('no data','sem dado')}</span></div>${err?`<div class="log mut">${esc(err)}</div>`:''}</div>`;
   const cls=w.pct>=90?'max':w.pct>=70?'hi':'';
   return `<div class="meter ${cls}"><div class="row"><span>${title}</span><b>${w.pct.toFixed(0)}%</b></div>
   <div class="bar"><i style="width:${Math.min(100,w.pct)}%"></i></div><div class="log mut">${until(w.resets_at,now)}</div></div>`}
-function usage(u,now){
-  document.getElementById('usage').innerHTML=u?meter('Sessão (5 h)',u.five_hour,now)+meter('Semana (7 d)',u.seven_day,now)
-    :'<div class="meter mut">Uso do plano: consultando o Claude Code (precisa estar instalado e logado).</div>';
-  const age=u&&u.updated?now-u.updated:null;
-  document.getElementById('stale').textContent=u&&age>900?'Atualizado há '+ago(age)+'.':'';
+function usage(u,now,err){u=u||{};
+  document.getElementById('usage').innerHTML=meter(T('Session (5 h)','Sessão (5 h)'),u.five_hour,now,err)+meter(T('Week (7 d)','Semana (7 d)'),u.seven_day,now,err);
+  const age=u.updated?now-u.updated:null;
+  document.getElementById('stale').textContent=age>900?T('Updated '+ago(age)+' ago.','Atualizado há '+ago(age)+'.'):'';
 }
 async function tick(){
-  let data;try{data=window.AI_STATUS_FETCH?await AI_STATUS_FETCH():await (await fetch('api')).json()}catch(e){document.getElementById('sum').textContent='servidor parado';return}
+  let data;try{data=window.AI_STATUS_FETCH?await AI_STATUS_FETCH():await (await fetch('api')).json()}catch(e){document.getElementById('sum').textContent=T('server stopped','servidor parado');return}
   if(!window.AI_STATUS_FETCH&&window.boot&&data.boot!==window.boot)return location.reload();   // servidor reiniciado (talvez código novo): recarrega a página
   window.boot=data.boot;
-  usage(data.usage,data.now);
-  const rows=data.tasks, all=document.getElementById('all').checked, run=rows.filter(r=>r.status==='rodando');
-  const busy=data.agents.filter(a=>a.status==='trabalhando').length;
-  document.getElementById('sum').textContent=run.length+' tarefa(s) rodando · '+data.agents.length+' agente(s), '+busy+' trabalhando · '+new Date().toLocaleTimeString();
-  const open=new Set([...document.querySelectorAll('details[open]')].map(d=>d.dataset.id));
-  document.getElementById('list').innerHTML=(all?rows:rows.filter(r=>r.status==='rodando'||r.status==='sem notícia')).map(r=>task(r,open)).join('')
-    ||'<p class="mut">Nada rodando agora.</p>';
-  document.getElementById('agents').innerHTML=data.agents.map(agent).join('')||'<p class="mut">Nenhuma sessão ativa nas últimas 24 h.</p>';
+  const now=data.now, all=document.getElementById('all').checked;
+  usage(data.usage,now,data.usage_error);
+  const shown=t=>t.status==='rodando'||t.status==='sem notícia'||all||(t.ended!=null&&now-t.ended<KEEP_DONE);
+  const rows=data.tasks.filter(shown), live=new Set(data.agents.map(a=>a.session));
+  const run=data.tasks.filter(r=>r.status==='rodando').length, busy=data.agents.filter(a=>a.status==='trabalhando').length;
+  document.getElementById('sum').textContent=run+T(' task(s) running · ',' tarefa(s) rodando · ')+data.agents.length+T(' session(s), ',' sessão(ões), ')+busy+T(' working · ',' trabalhando · ')+new Date().toLocaleTimeString();
+  document.getElementById('sessTitle').textContent=T('Sessions','Sessões')+'  ('+data.agents.length+')';
+  let html=data.agents.map(a=>session(a,rows.filter(t=>t.session===a.session),now)).join('');
+  const orphans=rows.filter(t=>!live.has(t.session)), k='s:inactive';
+  if(orphans.length)html+=`<details class="card sess" data-k="${k}" ${isOpen(k,orphans.some(t=>t.status==='rodando'))?'open':''}><summary><span class="desc">${T('Inactive sessions','Sessões inativas')}</span></summary>${groups('inactive',[],orphans,now)}</details>`;
+  document.getElementById('sessions').innerHTML=html||'<p class="mut">'+T('No session active in the last 24 h.','Nenhuma sessão ativa nas últimas 24 h.')+'</p>';
 }
 document.getElementById('all').onchange=tick;tick();setInterval(tick,3000);
 </script></body></html>"""
 
 
-USAGE_PAGE = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+USAGE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI Usage</title><style>
 :root{--bg:#f6f6f4;--card:#fff;--fg:#1c1c1a;--mut:#6b6b66;--line:#e3e2dd;--acc:#2f5fb3}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--fg:#ecebe6;--mut:#9a9993;--line:#33322f;--acc:#8ab4ff}}
@@ -619,33 +680,33 @@ h1{font-size:18px;margin:0}h2{font-size:13px;text-transform:uppercase;letter-spa
 .row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 8px;font-size:13px;margin:0 0 8px}.row span{overflow-wrap:anywhere}
 .row .bar{grid-column:1/-1;height:6px;background:var(--line);border-radius:3px;overflow:hidden}.row .bar i{display:block;height:100%;background:var(--acc)}
 svg text{fill:var(--mut);font-size:10px}svg rect{fill:var(--acc)}svg rect:hover{opacity:.7}
-</style></head><body><h1>AI Usage</h1><div class="mut" id="sub">carregando…</div>
-<div class="kpis" id="kpis"></div><div class="card"><h2>Por dia</h2><div id="chart"></div></div>
-<div class="grid"><div class="card"><h2>Projetos</h2><div id="projects"></div></div><div class="card"><h2>Modelos</h2><div id="models"></div></div>
-<div class="card"><h2>Tipos de token</h2><div id="kinds"></div></div><div class="card"><h2>Ferramentas (chamadas)</h2><div id="tools"></div></div></div>
+</style></head><body><h1>AI Usage</h1><div class="mut" id="sub" data-pt="carregando…">loading…</div>
+<div class="kpis" id="kpis"></div><div class="card"><h2 data-pt="Por dia">Per day</h2><div id="chart"></div></div>
+<div class="grid"><div class="card"><h2 data-pt="Projetos">Projects</h2><div id="projects"></div></div><div class="card"><h2 data-pt="Modelos">Models</h2><div id="models"></div></div>
+<div class="card"><h2 data-pt="Tipos de token">Token types</h2><div id="kinds"></div></div><div class="card"><h2 data-pt="Ferramentas (chamadas)">Tools (calls)</h2><div id="tools"></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money=c=>'$'+c.toFixed(2);
 const tok=n=>n>=1e9?(n/1e9).toFixed(2)+' B':n>=1e6?(n/1e6).toFixed(1)+' M':n>=1e3?(n/1e3).toFixed(0)+' k':String(Math.round(n));
 function bars(rows,val,label){const max=Math.max(...rows.map(val),1e-9);
-  return rows.map(r=>`<div class="row"><span>${esc(r.name)}</span><span class="mut">${label(r)}</span><div class="bar"><i style="width:${100*val(r)/max}%"></i></div></div>`).join('')||'<p class="mut">Nada no período.</p>'}
+  return rows.map(r=>`<div class="row"><span>${esc(r.name)}</span><span class="mut">${label(r)}</span><div class="bar"><i style="width:${100*val(r)/max}%"></i></div></div>`).join('')||'<p class="mut">'+T('Nothing in the period.','Nada no período.')+'</p>'}
 function chart(days,val,label){const H=140,bw=18,W=days.length*bw,max=Math.max(...days.map(val),1e-9),step=Math.ceil(days.length/12);
   return `<svg viewBox="0 0 ${W} ${H+16}" width="100%" role="img" aria-label="Uso por dia">`+days.map((d,i)=>{const h=Math.round(H*val(d)/max);
     return `<rect x="${i*bw+2}" y="${H-h}" width="${bw-4}" height="${h}" rx="2"><title>${d.name}: ${label(d)}</title></rect>`
       +(i%step===0?`<text x="${i*bw+bw/2}" y="${H+12}" text-anchor="middle">${d.name.slice(8)}/${d.name.slice(5,7)}</text>`:'')}).join('')+'</svg>'}
 async function tick(){
-  let u;try{u=await (await fetch('api/usage')).json()}catch(e){$('sub').textContent='servidor parado';return}
-  if(!u.days){$('sub').textContent='calculando (lendo os históricos do Claude Code)…';return}
+  let u;try{u=await (await fetch('api/usage')).json()}catch(e){$('sub').textContent=T('server stopped','servidor parado');return}
+  if(!u.days){$('sub').textContent=T('calculating (reading the Claude Code histories)…','calculando (lendo os históricos do Claude Code)…');return}
   const p=u.priced,val=p?r=>r.cost:r=>r.tokens,label=r=>(p?money(r.cost)+' · ':'')+tok(r.tokens)+' tokens';
-  $('sub').textContent=`Últimos ${u.period} dias · `+(p?'custo a preço de API (tabela LiteLLM), não o que o plano cobra':'sem tabela de preços (offline): só tokens')
-    +(u.unpriced.length?' · sem preço: '+u.unpriced.join(', '):'')+' · atualizado '+new Date(u.updated*1000).toLocaleTimeString();
-  $('kpis').innerHTML=[['Total',u.total],['Hoje',u.today],['Média por dia',{cost:u.total.cost/u.period,tokens:u.total.tokens/u.period}]]
+  $('sub').textContent=T(`Last ${u.period} days · `,`Últimos ${u.period} dias · `)+(p?T('cost at API prices (LiteLLM table), not what the plan charges','custo a preço de API (tabela LiteLLM), não o que o plano cobra'):T('no price table (offline): tokens only','sem tabela de preços (offline): só tokens'))
+    +(u.unpriced.length?T(' · no price: ',' · sem preço: ')+u.unpriced.join(', '):'')+T(' · updated ',' · atualizado ')+new Date(u.updated*1000).toLocaleTimeString();
+  $('kpis').innerHTML=[['Total',u.total],[T('Today','Hoje'),u.today],[T('Daily average','Média por dia'),{cost:u.total.cost/u.period,tokens:u.total.tokens/u.period}]]
     .map(([t,r])=>`<div class="card kpi"><span class="mut">${t}</span><b>${p?money(r.cost):tok(r.tokens)}</b><span class="mut">${tok(r.tokens)} tokens</span></div>`).join('');
   $('chart').innerHTML=chart(u.days,val,label);
   $('projects').innerHTML=bars(u.projects,val,label);
   $('models').innerHTML=bars(u.models,val,label);
-  $('kinds').innerHTML=bars(u.kinds,val,label);
+  $('kinds').innerHTML=bars(u.kinds.map(k=>({...k,name:S(k.name)})),val,label);
   $('tools').innerHTML=bars(u.tools,r=>r.count,r=>r.count+'');
 }
 tick();setInterval(tick,30000);
@@ -655,9 +716,17 @@ tick();setInterval(tick,30000);
 # "/": as duas páginas acima em abas. Iframes porque cada uma tem o próprio CSS e JS (nomes repetidos: .row, tick, $...);
 # dentro da aba o título some (FRAMED), a aba já diz o que é. #usage na URL abre direto na aba de uso.
 FRAMED = "<script>if(window!==top)document.documentElement.classList.add('framed')</script><style>.framed h1{display:none}</style>"
-PAGE = PAGE.replace("</head>", FRAMED + "</head>", 1)
-USAGE_PAGE = USAGE_PAGE.replace("</head>", FRAMED + "</head>", 1)
-TABS_PAGE = """<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+# Idioma do navegador: português se começa com "pt", senão inglês. T(en, pt) no JS; data-pt no HTML estático;
+# S() traduz os status e tipos de token que vêm do servidor em português (também usados como classes CSS).
+I18N = """<script>const PT=/^pt/i.test(navigator.language||'');const T=(en,pt)=>PT?pt:en;
+const S=s=>(PT?{completed:'concluída',failed:'falhou',killed:'encerrada',stopped:'parada'}
+  :{rodando:'running','sem notícia':'no news',trabalhando:'working','aguardando você':'waiting for you','esperando ferramenta':'waiting on a tool',
+    parado:'idle',entrada:'input','saída':'output','gravação de cache':'cache write','leitura de cache':'cache read'})[s]||s;
+addEventListener('DOMContentLoaded',()=>{if(!PT)return;document.documentElement.lang='pt-BR';
+  for(const e of document.querySelectorAll('[data-pt]'))e.textContent=e.dataset.pt})</script>"""
+PAGE = PAGE.replace("</head>", I18N + FRAMED + "</head>", 1)
+USAGE_PAGE = USAGE_PAGE.replace("</head>", I18N + FRAMED + "</head>", 1)
+TABS_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AI Status</title><style>
 :root{--bg:#f6f6f4;--fg:#1c1c1a;--mut:#6b6b66;--line:#e3e2dd;--acc:#2f5fb3}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#ecebe6;--mut:#9a9993;--line:#33322f;--acc:#8ab4ff}}
@@ -690,7 +759,7 @@ def serve(port, days, usage_days):
                 body, kind = json.dumps(_report.get("u", {})).encode(), "application/json"
             elif self.path.startswith("/api"):
                 rows = snapshot(days)
-                body, kind = json.dumps({"tasks": rows, "agents": agents(rows), "usage": usage(), "now": time.time(), "boot": BOOT,
+                body, kind = json.dumps({"tasks": rows, "agents": agents(rows), "usage": usage(), "usage_error": _cli_error.get("e"), "now": time.time(), "boot": BOOT,
                                    "version": VERSION, "pid": os.getpid()}).encode(), "application/json"
             elif self.path.startswith("/usage"):
                 body, kind = USAGE_PAGE.encode(), "text/html; charset=utf-8"
@@ -727,6 +796,11 @@ def selftest():
                                                        "input": {"command": "x", "description": "B", "run_in_background": True}}]}},
         {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "content": "running in background with ID: c999zzzzz."}]}},
         {"type": "user", "message": {"content": "<task-notification><task-id>a000yyyyy</task-id><task-id>c999zzzzz</task-id><status>stopped</status>"}},
+        # Agent assíncrono (o padrão): a linha da chamada não tem run_in_background nem agentId
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t3", "name": "Agent",
+                                                       "input": {"description": "Revisa", "prompt": "revise", "subagent_type": "general-purpose"}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t3",
+                                                  "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: ab4d307c28cf1c0d3 (internal ID)"}]}]}},
     ]
     p.write_text("".join(json.dumps(l) + "\n" for l in lines), encoding="utf-8")
     st = parse_session(p)
@@ -734,7 +808,12 @@ def selftest():
     assert title == "faça as quadras" and cwd.endswith("freedom"), (title, cwd)
     assert tasks["b123abcde"]["command"] == "python a.py" and tasks["b123abcde"]["status"] == "completed", tasks
     assert tasks["c999zzzzz"]["status"] == "stopped", tasks   # várias tarefas num aviso só
+    assert tasks["ab4d307c28cf1c0d3"]["status"] == "rodando" and tasks["ab4d307c28cf1c0d3"]["tool"] == "Agent", tasks
     assert epoch(tasks["b123abcde"]["ended"]) == 1792317900.0 and epoch("") is None   # a repetição sem hora não apaga
+    if os.name == "nt":   # saída de tarefa viva: aberta pelo processo; morta: ninguém segura
+        with open(p, "a") as held:
+            assert held_open(p) is True
+        assert held_open(p) is False
     assert progress(["ladrilho 18/93 (40.73, -74.00): 44 quadras", "Solow: 3 partes"])["pct"] == 19.4
     assert progress(["Uploading LFS objects: 100% (24/24)"])["pct"] == 100.0
     assert progress(["data 2026/10/18 12:30"]) is None
@@ -745,6 +824,8 @@ def selftest():
     import shutil, subprocess
     if shutil.which("node"):   # o JS da página quebrado deixa o painel em branco sem erro nenhum aqui
         js = pathlib.Path(tempfile.mkdtemp()) / "page.js"
+        js.write_text(I18N[8:-9], encoding="utf-8")
+        assert subprocess.run(["node", "--check", str(js)], capture_output=True).returncode == 0, "JS do I18N com erro de sintaxe"
         for page in (PAGE, USAGE_PAGE, TABS_PAGE):
             body = page[page.index("<body>"):]
             js.write_text(body[body.index("<script>") + 8:body.index("</script>")], encoding="utf-8")

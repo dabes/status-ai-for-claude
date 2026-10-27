@@ -2,20 +2,34 @@
 
 > **Unofficial.** Not made by, affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
 
-A VS Code panel that shows your **plan usage** at the top (current 5-hour session and current week, with the time each resets), and below it, in two columns:
+A VS Code panel that shows your **plan usage** at the top (current 5-hour session and current week, with the time each resets). Below it is every Claude Code session active in the last 24 hours. Each session shows:
 
-- **Tasks.** What each Claude Code session is running: the tool call it is waiting on right now (a foreground command, a subagent, a file read…), shown as *primeiro plano* with how long it has been running, and the commands it launched in the background, including subagents. Each background task shows:
-  - its status: running, completed, failed, killed or stopped;
-  - the session that launched it;
-  - a progress bar;
-  - the last lines of its log.
-- **Agents.** Every Claude Code session active in the last 24 hours. Each one shows:
-  - its model;
-  - what it is doing right now (the tool it is running, or the start of its last reply);
-  - the last request you made;
-  - how many tasks it has running.
+- its status, model and how many tasks it has running;
+- what it is doing right now (the tool it is running, or the start of its last reply) and the last request you made;
+- what it is running, in two groups, **Commands** (commands and other tools) and **Agents** (subagents):
+  - the tool call it is waiting on right now, shown as *foreground* with how long it has been running;
+  - the commands it launched in the background, with their status (running, completed, failed, killed or stopped), progress and the last line they wrote.
 
-In the VS Code panel, each session lists what it is running in two groups, **Comandos** (commands and other tools) and **Agentes** (subagents). A finished task stays listed for 5 minutes after it ends, then leaves the list.
+A finished task stays listed for 5 minutes after it ends, then leaves the list. Tasks whose session has closed are under **Inactive sessions**.
+
+**Open in Browser** opens the same structure as a page, with two tabs, **AI Status** and **AI Usage**. The page adds the full command, the last lines of its log and a **show finished** switch that keeps every finished task listed.
+
+## Languages
+
+English and Portuguese (Brazil). Any other language falls back to English.
+
+**Choosing the language**
+
+- **Panel, commands and settings** follow VS Code's display language. To change it, run **Configure Display Language** from the Command Palette, pick a language and restart VS Code. Portuguese needs the *Portuguese (Brazil) Language Pack*, which VS Code offers to install. To force a language without changing VS Code's, start it with `code --locale=pt-br` or `code --locale=en`.
+- **Browser page** (**Open in Browser** and **Open Charts**) follows the browser's preferred language. It is in Portuguese when that language starts with `pt`, otherwise in English. In Chrome or Edge, change it in **Settings → Languages** and move the language you want to the top.
+
+**Adding a language**
+
+The English text lives in the code. Each translation is a file named after the VS Code language id, for example `es` or `fr`:
+
+1. Copy `package.nls.pt-br.json` to `package.nls.<id>.json` and translate the values. It holds the command titles and setting descriptions.
+2. Copy `l10n/bundle.l10n.pt-br.json` to `l10n/bundle.l10n.<id>.json` and translate the values. It holds the panel text. Keep the keys and placeholders such as `{0}` as they are.
+3. For the browser page, add the language to the `I18N` script in `media/ai_status.py`. Today it holds only English and Portuguese, in the `T(en, pt)` calls and the `data-pt` attributes.
 
 ## AI Usage
 
@@ -67,5 +81,3 @@ It serves the page on `127.0.0.1` only. It makes two kinds of network request: a
 | `aiStatus.port` | `8765` | Local port of the panel server |
 | `aiStatus.days` | `3` | Days of sessions to scan for tasks |
 | `aiStatus.usageDays` | `30` | Days of history the AI Usage tab sums |
-
-The interface is currently in Portuguese (pt-BR).

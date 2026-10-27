@@ -10,6 +10,13 @@ const { spawn } = require("child_process");
 
 let server = null;
 let log = { appendLine() {} };
+// UI strings are English in the code; vscode.l10n swaps them for l10n/bundle.l10n.<language>.json (pt-br).
+const L = (m, ...a) => vscode.l10n.t(m, ...a);
+// The server reports statuses and token kinds in Portuguese (also CSS classes on its page): shown translated here.
+const shownStatus = (s) => ({ rodando: L("running"), "sem notícia": L("no news"), completed: L("completed"), failed: L("failed"),
+  killed: L("killed"), stopped: L("stopped"), trabalhando: L("working"), "aguardando você": L("waiting for you"),
+  "esperando ferramenta": L("waiting on a tool"), parado: L("idle") })[s] || s;
+const kindName = (k) => ({ entrada: L("input"), "saída": L("output"), "gravação de cache": L("cache write"), "leitura de cache": L("cache read") })[k] || k;
 const say = (m) => log.appendLine(`${new Date().toLocaleTimeString()} ${m}`);
 
 // The server's {version, pid} when it answers, else false. A pre-0.5.1 server answers without them.
@@ -43,7 +50,7 @@ async function ensureServer(context) {
   // A server left by another window on an older version lacks newer routes (/api/usage): replace it. A newer one
   // is kept, so two windows on different versions don't keep killing each other's server.
   if (running && older(running.version, mine)) {
-    if (!running.pid) throw new Error(`an older AI Status server (before 0.5.1) is on port ${port}. Reload the other VS Code windows (Developer: Reload Window) to stop it.`);
+    if (!running.pid) throw new Error(L("an older AI Status server (before 0.5.1) is on port {0}. Reload the other VS Code windows (Developer: Reload Window) to stop it.", port));
     say(`replacing server ${running.version} (pid ${running.pid}) with ${mine}`);
     try { process.kill(running.pid); } catch {}
     for (let i = 0; i < 20 && (await alive(port)); i++) await new Promise((r) => setTimeout(r, 250));
@@ -59,7 +66,7 @@ async function ensureServer(context) {
     if (await alive(port)) return port;
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`the panel server did not answer on port ${port}. Check that Python 3 is installed (setting aiStatus.python) and the port is free (aiStatus.port).`);
+  throw new Error(L("the panel server did not answer on port {0}. Check that Python 3 is installed (setting aiStatus.python) and the port is free (aiStatus.port).", port));
 }
 
 function get(port, urlPath) {
@@ -101,14 +108,14 @@ function item(label, opts = {}) {
   it.description = opts.description;
   it.tooltip = opts.tooltip;
   if (opts.icon) it.iconPath = new vscode.ThemeIcon(opts.icon, opts.color && new vscode.ThemeColor(opts.color));
-  if (opts.log) it.command = { command: "vscode.open", title: "Open log", arguments: [vscode.Uri.file(opts.log)] };
+  if (opts.log) it.command = { command: "vscode.open", title: L("Open log"), arguments: [vscode.Uri.file(opts.log)] };
   it.children = opts.children;
   return it;
 }
 
-function meter(title, w, now) {
-  if (!w) return item(title, { description: "sem dado", icon: "dashboard" });
-  const reset = w.resets_at ? `reinicia em ${ago(w.resets_at - now)}` : "";
+function meter(title, w, now, err) {
+  if (!w) return item(title, { description: err ? L("no data: {0}", err) : L("no data"), tooltip: err, icon: "dashboard" });
+  const reset = w.resets_at ? L("resets in {0}", ago(w.resets_at - now)) : "";
   const color = w.pct >= 90 ? "errorForeground" : w.pct >= 70 ? "editorWarning.foreground" : undefined;
   return item(`${title}  ${w.pct.toFixed(0)}%`, { description: `${bar(w.pct)}  ${reset}`, icon: "dashboard", color });
 }
@@ -117,29 +124,31 @@ const KEEP_DONE = 300;   // s that a finished task stays listed
 
 function tree(d) {
   const now = d.now, u = d.usage || {};
-  const usage = item("Uso do plano", { id: "usage", icon: "pulse", children: [
-    meter("Sessão (5 h)", windowOf(u.five_hour, now), now),
-    meter("Semana (7 d)", windowOf(u.seven_day, now), now),
+  const usage = item(L("Plan usage"), { id: "usage", icon: "pulse", children: [
+    meter(L("Session (5 h)"), windowOf(u.five_hour, now), now, d.usage_error),
+    meter(L("Week (7 d)"), windowOf(u.seven_day, now), now, d.usage_error),
   ] });
   // Background tasks still running, plus the finished ones for 5 min after they end (then they leave the list).
   const shown = (t) => t.status === "rodando" || t.status === "sem notícia" || (t.ended != null && now - t.ended < KEEP_DONE);
   function task(t) {
     const pct = t.status === "rodando" && t.progress && t.progress.pct != null ? `${t.progress.pct.toFixed(0)}%  ` : "";
     const icon = t.status === "rodando" ? "sync~spin" : t.status === "completed" ? "check" : "error";
-    const when = t.ended != null ? ` · há ${ago(now - t.ended)}` : "";
-    return item(t.description || t.command, { description: `${pct}${t.status}${when}`, icon, log: t.log,
+    const when = t.ended != null ? ` · ${L("{0} ago", ago(now - t.ended))}` : "";
+    // Running: what it last wrote (the progress line, else the log's or the output's last line), refreshed every poll.
+    const line = t.status === "rodando" && ((t.progress && t.progress.text) || (t.log_tail || []).slice(-1)[0] || t.last);
+    return item(t.description || t.command, { description: line ? `${pct}${line.trim().slice(0, 120)}` : `${pct}${shownStatus(t.status)}${when}`, icon, log: t.log,
       tooltip: [t.command, ...(t.log_tail || [t.last || ""])].join("\n") });
   }
   // The tool call the session is waiting on right now (foreground: Bash without run_in_background, Agent, Read…).
   const fg = (c) => item(c.description || c.command || c.tool, { icon: "play-circle", color: "charts.green", tooltip: c.command,
-    description: `${c.tool} · primeiro plano${c.started ? ` · ${ago(now - Date.parse(c.started) / 1000)}` : ""}` });
+    description: `${c.tool} · ${L("foreground")}${c.started ? ` · ${ago(now - Date.parse(c.started) / 1000)}` : ""}` });
   // A session's calls split in two groups: commands (Bash and other tools) and agents (Agent: subagents).
   const groups = (id, current, tasks) => {
     const agent = (x) => x.tool === "Agent";
-    const group = (name, icon, list) => list.length && item(`${name}  (${list.length})`, { id: `${id}:${name}`, icon, children: list });
+    const group = (key, name, icon, list) => list.length && item(`${name}  (${list.length})`, { id: `${id}:${key}`, icon, children: list });
     return [
-      group("Comandos", "terminal", [...current.filter((c) => !agent(c)).map(fg), ...tasks.filter((t) => !agent(t)).map(task)]),
-      group("Agentes", "hubot", [...current.filter(agent).map(fg), ...tasks.filter(agent).map(task)]),
+      group("cmd", L("Commands"), "terminal", [...current.filter((c) => !agent(c)).map(fg), ...tasks.filter((t) => !agent(t)).map(task)]),
+      group("agents", L("Agents"), "hubot", [...current.filter(agent).map(fg), ...tasks.filter(agent).map(task)]),
     ].filter(Boolean);
   };
   const live = new Set(d.agents.map((a) => a.session));
@@ -147,16 +156,16 @@ function tree(d) {
     const mine = d.tasks.filter((t) => t.session === a.session && shown(t));
     const current = a.current || [];
     const running = mine.filter((t) => t.status === "rodando").length + current.length;
-    return item(`${a.project}: ${a.status}${running ? `  (${running} rodando)` : ""}`, {
+    return item(`${a.project}: ${shownStatus(a.status)}${running ? `  (${L("{0} running", running)})` : ""}`, {
       id: a.session, description: a.action, tooltip: `${a.title}\n${a.model}\n${a.action}`, children: groups(a.session, current, mine),
       collapsed: !running, icon: a.status === "trabalhando" ? "loading~spin" : a.status === "parado" ? "debug-pause" : "comment" });
   });
   const orphans = d.tasks.filter((t) => !live.has(t.session) && shown(t));
   if (orphans.length) {
-    sessions.push(item("Sessões inativas", { id: "inactive", icon: "history", children: groups("inactive", [], orphans),
+    sessions.push(item(L("Inactive sessions"), { id: "inactive", icon: "history", children: groups("inactive", [], orphans),
       collapsed: !orphans.some((t) => t.status === "rodando") }));
   }
-  return [usage, item(`Sessões  (${d.agents.length})`, { id: "sessions", icon: "hubot", children: sessions })];
+  return [usage, item(`${L("Sessions")}  (${d.agents.length})`, { id: "sessions", icon: "hubot", children: sessions })];
 }
 
 const money = (c) => `$${c.toFixed(2)}`;
@@ -164,7 +173,7 @@ const tokens = (n) => n >= 1e9 ? `${(n / 1e9).toFixed(2)} B` : n >= 1e6 ? `${(n 
 
 // AI Usage tab: tokens and cost (API prices) from /api/usage, as bars relative to the largest row of each group.
 function usageTree(u) {
-  if (!u.days) return [item("calculando o uso…", { icon: "loading~spin", description: "lendo os históricos do Claude Code" })];
+  if (!u.days) return [item(L("calculating usage…"), { icon: "loading~spin", description: L("reading the Claude Code histories") })];
   const val = (r) => (u.priced ? r.cost : r.tokens);
   const label = (r) => `${u.priced ? `${money(r.cost)} · ` : ""}${tokens(r.tokens)} tokens`;
   const bars = (rows, name, val, label) => {
@@ -173,17 +182,17 @@ function usageTree(u) {
   };
   const group = (id, title, icon, children, collapsed) => item(title, { id, icon, children, collapsed });
   const days = u.days.slice(-14).reverse();
-  const weekday = (s) => new Date(`${s}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit" });
+  const weekday = (s) => new Date(`${s}T12:00:00`).toLocaleDateString(vscode.env.language, { weekday: "short", day: "2-digit", month: "2-digit" });
   return [
-    item(`Últimos ${u.period} dias  ${u.priced ? money(u.total.cost) : tokens(u.total.tokens)}`, { icon: "graph",
-      description: `${tokens(u.total.tokens)} tokens · hoje ${label(u.today)}`,
-      tooltip: u.priced ? `Custo a preço de API (tabela LiteLLM), não o que o plano cobra.${u.unpriced.length ? `\nSem preço: ${u.unpriced.join(", ")}` : ""}`
-        : "Sem tabela de preços (offline): só tokens." }),
-    group("u-days", "Por dia (14 d)", "calendar", bars(days, (r) => weekday(r.name), val, label)),
-    group("u-projects", "Projetos", "folder", bars(u.projects, (r) => r.name, val, label)),
-    group("u-models", "Modelos", "hubot", bars(u.models, (r) => r.name, val, label), true),
-    group("u-kinds", "Tipos de token", "symbol-number", bars(u.kinds, (r) => r.name, val, label), true),
-    group("u-tools", "Ferramentas", "tools", bars(u.tools, (r) => r.name, (r) => r.count, (r) => `${r.count} chamadas`), true),
+    item(`${L("Last {0} days", u.period)}  ${u.priced ? money(u.total.cost) : tokens(u.total.tokens)}`, { icon: "graph",
+      description: `${tokens(u.total.tokens)} tokens · ${L("today {0}", label(u.today))}`,
+      tooltip: u.priced ? L("Cost at API prices (LiteLLM table), not what the plan charges.") + (u.unpriced.length ? `\n${L("No price: {0}", u.unpriced.join(", "))}` : "")
+        : L("No price table (offline): tokens only.") }),
+    group("u-days", L("Per day (14 d)"), "calendar", bars(days, (r) => weekday(r.name), val, label)),
+    group("u-projects", L("Projects"), "folder", bars(u.projects, (r) => r.name, val, label)),
+    group("u-models", L("Models"), "hubot", bars(u.models, (r) => r.name, val, label), true),
+    group("u-kinds", L("Token types"), "symbol-number", bars(u.kinds, (r) => kindName(r.name), val, label), true),
+    group("u-tools", L("Tools"), "tools", bars(u.tools, (r) => r.name, (r) => r.count, (r) => L("{0} calls", r.count)), true),
   ];
 }
 
@@ -200,7 +209,7 @@ class Provider {
     this.build = build;
     this.changed = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.changed.event;
-    this.roots = [item("carregando…", { icon: "loading~spin" })];
+    this.roots = [item(L("loading…"), { icon: "loading~spin" })];
   }
 
   getTreeItem(it) {
@@ -218,7 +227,7 @@ class Provider {
       this.roots = this.build(this.data);
     } catch (e) {
       say(`refresh failed: ${e.message}`);
-      this.roots = [item("AI Status indisponível", { description: e.message, tooltip: e.message, icon: "error" })];
+      this.roots = [item(L("AI Status unavailable"), { description: e.message, tooltip: e.message, icon: "error" })];
     }
     this.changed.fire();
   }
@@ -233,7 +242,7 @@ function activate(context) {
   const page = (p) => `http://localhost:${vscode.workspace.getConfiguration("aiStatus").get("port")}/${p}`;
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   status.command = "aiStatus.view.focus";
-  status.tooltip = "AI Status: uso do plano do Claude Code (5 h · 7 d)";
+  status.tooltip = L("AI Status: Claude Code plan usage (5 h · 7 d)");
   let at = 0;
   const tick = async (force) => {
     // ponytail: polls the server every 3 s while the tree is visible, every 30 s (status bar only) otherwise.

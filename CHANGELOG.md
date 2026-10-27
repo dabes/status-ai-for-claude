@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.2
+
+- Subagents show up again under **Agents**. Claude Code now launches them asynchronously by default, and the panel was skipping those calls, so almost none were listed.
+
+## 0.6.1
+
+- The browser page's AI Status tab now has the same structure as the panel: plan usage, then each session (collapsible) with its **Commands** and **Agents**, foreground and background together, and **Inactive sessions**. Finished tasks leave it 5 minutes after they end unless **show finished** is on. Sections you open or close stay that way across refreshes. When plan usage has no data, the page shows why.
+- A background command whose process died without its end marker (for example when the Claude Code that launched it closed) no longer shows as running forever. On Windows the panel checks whether anything still holds the command's output file open. Elsewhere it is still marked after 6 hours without output.
+- Tasks of a resumed session find their output, which stays in the folder of the session that launched them.
+- Plan usage: when Claude Code doesn't answer, the panel shows why next to *no data* and retries after 1 minute instead of 5. Before, it stayed empty with no reason given.
+
+## 0.6.0
+
+- Internationalization: English and Portuguese (Brazil). The panel, commands and settings follow VS Code's display language; the browser page follows the browser's language. Other languages fall back to English.
+
+## 0.5.3
+
+- A running background task shows, next to its name, its progress and the last line it wrote, updated at every refresh, instead of just *rodando*.
+
 ## 0.5.2
 
 - Each session in the panel groups what it is running under **Comandos** and **Agentes**, foreground and background together.

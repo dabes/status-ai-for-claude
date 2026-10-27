@@ -2,7 +2,7 @@
   "name": "status-ai-for-claude",
   "displayName": "Status AI for Claude",
   "description": "Unofficial. Plan usage (5-hour and weekly limits), what each Claude Code session is running (foreground and background, with progress) and AI Usage: tokens and cost per day, project, model and tool.",
-  "version": "0.5.2",
+  "version": "0.6.2",
   "publisher": "xpree",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -24,6 +24,7 @@
     "tokens"
   ],
   "main": "./extension.js",
+  "l10n": "./l10n",
   "activationEvents": [
     "onStartupFinished"
   ],
@@ -32,12 +33,12 @@
       "panel": [
         {
           "id": "aiStatus",
-          "title": "AI Status",
+          "title": "%aiStatus.container%",
           "icon": "$(pulse)"
         },
         {
           "id": "aiUsage",
-          "title": "AI Usage",
+          "title": "%aiUsage.container%",
           "icon": "$(graph)"
         }
       ]
@@ -46,35 +47,35 @@
       "aiStatus": [
         {
           "id": "aiStatus.view",
-          "name": "AI Status"
+          "name": "%aiStatus.view%"
         }
       ],
       "aiUsage": [
         {
           "id": "aiStatus.usage",
-          "name": "AI Usage"
+          "name": "%aiStatus.usage%"
         }
       ]
     },
     "commands": [
       {
         "command": "aiStatus.reload",
-        "title": "AI Status: Refresh",
+        "title": "%cmd.reload%",
         "icon": "$(refresh)"
       },
       {
         "command": "aiStatus.openBrowser",
-        "title": "AI Status: Open in Browser",
+        "title": "%cmd.openBrowser%",
         "icon": "$(link-external)"
       },
       {
         "command": "aiStatus.reloadUsage",
-        "title": "AI Usage: Refresh",
+        "title": "%cmd.reloadUsage%",
         "icon": "$(refresh)"
       },
       {
         "command": "aiStatus.openUsage",
-        "title": "AI Usage: Open Charts",
+        "title": "%cmd.openUsage%",
         "icon": "$(graph-line)"
       }
     ],
@@ -84,22 +85,22 @@
         "aiStatus.python": {
           "type": "string",
           "default": "",
-          "description": "Python 3 executable used to run the panel server. Empty: \"python\" on Windows, \"python3\" elsewhere."
+          "description": "%cfg.python%"
         },
         "aiStatus.port": {
           "type": "number",
           "default": 8765,
-          "description": "Local port of the panel server (127.0.0.1 only)."
+          "description": "%cfg.port%"
         },
         "aiStatus.days": {
           "type": "number",
           "default": 3,
-          "description": "How many days of Claude Code sessions to scan for background tasks."
+          "description": "%cfg.days%"
         },
         "aiStatus.usageDays": {
           "type": "number",
           "default": 30,
-          "description": "How many days of Claude Code history the AI Usage tab sums (tokens and cost)."
+          "description": "%cfg.usageDays%"
         }
       }
     },
