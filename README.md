@@ -4,7 +4,7 @@
 
 See how much of your Claude Code 5-hour and weekly limits is left, and what every session, command and subagent is running, without leaving VS Code. Nothing to install: it runs on the Node.js that comes with VS Code.
 
-![A background command's progress updating live, then the AI Usage tab with cost per day](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/demo.gif)
+![A background command's progress updating live, then the AI Usage tab with cost per day](docs/images/demo.gif)
 
 A VS Code panel that shows your **plan usage** at the top (current 5-hour session and current week, with the time each resets). Below it is every Claude Code session active in the last 24 hours. Each session shows:
 
@@ -20,11 +20,11 @@ A finished task stays listed for 5 minutes after it ends, then leaves the list. 
 
 | Panel: AI Status | Panel: AI Usage |
 |---|---|
-| ![Plan usage and sessions in the AI Status panel](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/panel-status.png) | ![Cost and tokens per day in the AI Usage panel](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/panel-usage.png) |
+| ![Plan usage and sessions in the AI Status panel](docs/images/panel-status.png) | ![Cost and tokens per day in the AI Usage panel](docs/images/panel-usage.png) |
 
-![Browser page, AI Status tab: plan usage meters and sessions](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/page-status.png)
+![Browser page, AI Status tab: plan usage meters and sessions](docs/images/page-status.png)
 
-![Browser page, AI Usage tab: totals and cost per day](https://raw.githubusercontent.com/dabes/status-ai-for-claude-assets/main/screenshots/page-usage.png)
+![Browser page, AI Usage tab: totals and cost per day](docs/images/page-usage.png)
 
 ## Languages
 
