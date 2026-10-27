@@ -84,7 +84,8 @@ def parse_session(path, state=None):
                         # Subagente sem segundo plano: o resultado já é o fim (o relatório).
                         done = calls[c["tool_use_id"]]["tool"] == "Agent" and "launched" not in result.lower()
                         tasks[m.group(1)] = dict(calls[c["tool_use_id"]], started=d.get("timestamp", ""),
-                                                 status="completed" if done else "rodando", summary="")
+                                                 status="completed" if done else "rodando", summary="",
+                                                 ended=d.get("timestamp", "") if done else "")
         raw = d.get("content") if isinstance(d.get("content"), str) else ""
         body = text_of(content) + "\n" + raw
         # Um aviso pode trazer várias tarefas (as que morreram com a sessão vêm juntas): todos os <task-id> antes do <status>.
@@ -96,9 +97,10 @@ def parse_session(path, state=None):
             for tid in ids:
                 if tid in tasks:
                     tasks[tid]["status"], tasks[tid]["summary"] = m.group(2), (m.group(3) or "").strip()
+                    tasks[tid]["ended"] = d.get("timestamp") or tasks[tid].get("ended", "")   # api-request-blob repete o aviso sem hora
         for tid in HANDBACK.findall(body):
             if tid in tasks:
-                tasks[tid]["status"] = "completed"
+                tasks[tid]["status"], tasks[tid]["ended"] = "completed", d.get("timestamp") or tasks[tid].get("ended", "")
     st["title"], st["cwd"] = title, cwd
     return st
 
@@ -471,6 +473,14 @@ def download_progress(command, cwd):
     return None
 
 
+def epoch(ts):
+    """Timestamp ISO do histórico ("2026-10-20T12:00:00.123Z") em segundos; None se vazio ou inválido."""
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+
 def snapshot(days):
     rows, now = [], time.time()
     for path in PROJECTS.glob("*/*.jsonl"):
@@ -494,14 +504,15 @@ def snapshot(days):
                     log, log_lines, log_age = str(lp), lines, a
             if log_age is not None:
                 age = min(age, log_age) if age is not None else log_age
-            status = t["status"]
+            status, ended = t["status"], epoch(t.get("ended"))
             end = re.match(r"\[(killed|exited with code (\d+))\]", last)
             if status == "rodando" and end:
                 status = "killed" if end.group(1) == "killed" else ("completed" if end.group(2) == "0" else "failed")
+                ended = now - (age or 0)   # a última escrita na saída foi o fim
             elif status == "rodando" and (age if age is not None else now - mtime) > 6 * 3600:
                 status = "sem notícia"   # nada escrito há horas e nenhum aviso de fim
             rows.append({"id": tid, "tool": t["tool"], "description": t["description"], "command": t["command"][:2000],
-                         "started": t["started"], "status": status, "summary": t["summary"], "last": last, "size": size,
+                         "started": t["started"], "ended": ended, "status": status, "summary": t["summary"], "last": last, "size": size,
                          "log": log, "log_tail": [l[:200] for l in log_lines[-4:]], "progress": progress(log_lines or tail) or (download_progress(t["command"], cwd) if status == "rodando" else None),
                          "age": age, "session": session, "title": title,
                          "project": os.path.basename(cwd.rstrip("\\/")) or path.parent.name})
@@ -710,7 +721,8 @@ def selftest():
                                                        "input": {"command": "python a.py", "description": "Gera", "run_in_background": True}}]}},
         {"type": "user", "timestamp": "2026-10-18T10:00:00Z", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
                                                                                    "content": "Command running in background with ID: b123abcde. Output"}]}},
-        {"type": "user", "message": {"content": "<task-notification>\n<task-id>b123abcde</task-id>\n<status>completed</status>\n<summary>ok</summary>"}},
+        {"type": "user", "timestamp": "2026-10-18T10:05:00Z", "message": {"content": "<task-notification>\n<task-id>b123abcde</task-id>\n<status>completed</status>\n<summary>ok</summary>"}},
+        {"type": "api-request-blob", "message": {"content": "<task-notification>\n<task-id>b123abcde</task-id>\n<status>completed</status>"}},
         {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Bash",
                                                        "input": {"command": "x", "description": "B", "run_in_background": True}}]}},
         {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "content": "running in background with ID: c999zzzzz."}]}},
@@ -722,6 +734,7 @@ def selftest():
     assert title == "faça as quadras" and cwd.endswith("freedom"), (title, cwd)
     assert tasks["b123abcde"]["command"] == "python a.py" and tasks["b123abcde"]["status"] == "completed", tasks
     assert tasks["c999zzzzz"]["status"] == "stopped", tasks   # várias tarefas num aviso só
+    assert epoch(tasks["b123abcde"]["ended"]) == 1792317900.0 and epoch("") is None   # a repetição sem hora não apaga
     assert progress(["ladrilho 18/93 (40.73, -74.00): 44 quadras", "Solow: 3 partes"])["pct"] == 19.4
     assert progress(["Uploading LFS objects: 100% (24/24)"])["pct"] == 100.0
     assert progress(["data 2026/10/18 12:30"]) is None

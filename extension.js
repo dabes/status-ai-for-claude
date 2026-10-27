@@ -113,35 +113,47 @@ function meter(title, w, now) {
   return item(`${title}  ${w.pct.toFixed(0)}%`, { description: `${bar(w.pct)}  ${reset}`, icon: "dashboard", color });
 }
 
+const KEEP_DONE = 300;   // s that a finished task stays listed
+
 function tree(d) {
   const now = d.now, u = d.usage || {};
   const usage = item("Uso do plano", { id: "usage", icon: "pulse", children: [
     meter("Sessão (5 h)", windowOf(u.five_hour, now), now),
     meter("Semana (7 d)", windowOf(u.seven_day, now), now),
   ] });
-  // Each session's background tasks under it: the running ones and the last 5 finished.
-  const tasksOf = (list) => [...list.filter((t) => t.status === "rodando"), ...list.filter((t) => t.status !== "rodando").slice(0, 5)].map(task);
+  // Background tasks still running, plus the finished ones for 5 min after they end (then they leave the list).
+  const shown = (t) => t.status === "rodando" || t.status === "sem notícia" || (t.ended != null && now - t.ended < KEEP_DONE);
   function task(t) {
     const pct = t.status === "rodando" && t.progress && t.progress.pct != null ? `${t.progress.pct.toFixed(0)}%  ` : "";
     const icon = t.status === "rodando" ? "sync~spin" : t.status === "completed" ? "check" : "error";
-    return item(t.description || t.command, { description: `${pct}${t.status}`, icon, log: t.log,
+    const when = t.ended != null ? ` · há ${ago(now - t.ended)}` : "";
+    return item(t.description || t.command, { description: `${pct}${t.status}${when}`, icon, log: t.log,
       tooltip: [t.command, ...(t.log_tail || [t.last || ""])].join("\n") });
   }
   // The tool call the session is waiting on right now (foreground: Bash without run_in_background, Agent, Read…).
   const fg = (c) => item(c.description || c.command || c.tool, { icon: "play-circle", color: "charts.green", tooltip: c.command,
     description: `${c.tool} · primeiro plano${c.started ? ` · ${ago(now - Date.parse(c.started) / 1000)}` : ""}` });
+  // A session's calls split in two groups: commands (Bash and other tools) and agents (Agent: subagents).
+  const groups = (id, current, tasks) => {
+    const agent = (x) => x.tool === "Agent";
+    const group = (name, icon, list) => list.length && item(`${name}  (${list.length})`, { id: `${id}:${name}`, icon, children: list });
+    return [
+      group("Comandos", "terminal", [...current.filter((c) => !agent(c)).map(fg), ...tasks.filter((t) => !agent(t)).map(task)]),
+      group("Agentes", "hubot", [...current.filter(agent).map(fg), ...tasks.filter(agent).map(task)]),
+    ].filter(Boolean);
+  };
   const live = new Set(d.agents.map((a) => a.session));
   const sessions = d.agents.map((a) => {
-    const mine = d.tasks.filter((t) => t.session === a.session);
+    const mine = d.tasks.filter((t) => t.session === a.session && shown(t));
     const current = a.current || [];
     const running = mine.filter((t) => t.status === "rodando").length + current.length;
     return item(`${a.project}: ${a.status}${running ? `  (${running} rodando)` : ""}`, {
-      id: a.session, description: a.action, tooltip: `${a.title}\n${a.model}\n${a.action}`, children: [...current.map(fg), ...tasksOf(mine)],
+      id: a.session, description: a.action, tooltip: `${a.title}\n${a.model}\n${a.action}`, children: groups(a.session, current, mine),
       collapsed: !running, icon: a.status === "trabalhando" ? "loading~spin" : a.status === "parado" ? "debug-pause" : "comment" });
   });
-  const orphans = d.tasks.filter((t) => !live.has(t.session));
+  const orphans = d.tasks.filter((t) => !live.has(t.session) && shown(t));
   if (orphans.length) {
-    sessions.push(item("Sessões inativas", { id: "inactive", icon: "history", children: tasksOf(orphans),
+    sessions.push(item("Sessões inativas", { id: "inactive", icon: "history", children: groups("inactive", [], orphans),
       collapsed: !orphans.some((t) => t.status === "rodando") }));
   }
   return [usage, item(`Sessões  (${d.agents.length})`, { id: "sessions", icon: "hubot", children: sessions })];

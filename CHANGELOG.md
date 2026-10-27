@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2
+
+- Each session in the panel groups what it is running under **Comandos** and **Agentes**, foreground and background together.
+- A finished task leaves the list 5 minutes after it ends (it shows how long ago it finished), instead of the last 5 finished staying forever.
+
 ## 0.5.1
 
 - AI Usage no longer hangs on "calculando o uso…" when another VS Code window was still running an older panel server on the same port: the server now reports its version, and an older one is replaced. A server from before 0.5.1 cannot be replaced automatically, so the panel asks you to reload the other windows.

@@ -15,6 +15,8 @@ A VS Code panel that shows your **plan usage** at the top (current 5-hour sessio
   - the last request you made;
   - how many tasks it has running.
 
+In the VS Code panel, each session lists what it is running in two groups, **Comandos** (commands and other tools) and **Agentes** (subagents). A finished task stays listed for 5 minutes after it ends, then leaves the list.
+
 ## AI Usage
 
 A second tab, **AI Usage**, sums the tokens of every model response in your Claude Code histories (sessions and subagents) over the last 30 days (`aiStatus.usageDays`) and shows them per day, project, model, token type (input, output, cache write, cache read) and tool (number of calls). **AI Usage: Open Charts** opens the same data as charts inside VS Code.
